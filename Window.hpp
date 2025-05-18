@@ -24,7 +24,7 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50601000; // 5.6.1.0
+constexpr long version = 50602000; // 5.6.2.0
 
 declare_exception(window_not_initialized);
 declare_exception(window_already_initialized);
@@ -443,13 +443,6 @@ private:
 				return 0;
 			}
 		}
-		if (router.contains(msg)) {
-			auto& handler = router.at(msg);
-			return handler(wParam, lParam);
-		}
-		if (msg == WM_NOTIFY) {
-			return process_notification(wParam, lParam);
-		}
 		if (msg == WM_DESTROY) {
 			hwnd = nullptr;  // 窗口被销毁时置空句柄
 			if (managed.contains(hwnd)) {
@@ -458,7 +451,13 @@ private:
 			if (is_main_window) {
 				PostQuitMessage(0);  // 退出消息循环
 			}
-			return 0;
+		}
+		if (router.contains(msg)) {
+			auto& handler = router.at(msg);
+			return handler(wParam, lParam);
+		}
+		if (msg == WM_NOTIFY) {
+			return process_notification(wParam, lParam);
 		}
 		return DefWindowProc(hwnd, msg, wParam, lParam);
 	}
