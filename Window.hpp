@@ -6,13 +6,14 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 #pragma region internal macros
-#include <windows.h>
 #include <string>
 #include <stdexcept>
 #include <utility>
 #include <map>
 #include <functional>
-#include <iostream>
+#include <mutex>
+#include <windows.h>
+#include <windowsx.h>
 #define package namespace
 #define declare {
 #define endpackage }
@@ -23,21 +24,36 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 506000; // 5.6.0
+constexpr long version = 50601000; // 5.6.1.0
 
 declare_exception(window_not_initialized);
 declare_exception(window_already_initialized);
 declare_exception(window_class_registration_failure);
 declare_exception(window_creation_failure);
 
+package util declare;
+wstring s2ws(const string str);
+endpackage;
+
 class Window {
 private:
 	static unordered_map<HWND, Window*> managed;
-
+	static std::mutex default_font_mutex;
+	static HFONT default_font;
 protected:
 	HWND hwnd = nullptr; // 窗口句柄
 
+public:
+#if defined(WINDOW_USE_GENERATED_CLASS) && WINDOW_USE_GENERATED_CLASS
+	virtual const wstring get_class_name() const {
+		auto& type = typeid(*this);
+		return util::s2ws(type.name());
+	}
+#else
 	virtual const wstring get_class_name() const = 0;
+#endif
+
+protected:
 	virtual const HICON get_window_icon() const {
 		return NULL;
 	}
@@ -48,6 +64,25 @@ protected:
 	virtual bool class_registered() const {
 		WNDCLASSEXW wc{};
 		return (bool)GetClassInfoExW(GetModuleHandleW(NULL), class_name.c_str(), &wc);
+	}
+	virtual HFONT get_font() {
+		if (default_font) return default_font;
+		set_default_font();
+		return default_font;
+	}
+	static void set_default_font(HFONT font) {
+		default_font_mutex.lock();
+		if (default_font) DeleteObject(default_font);
+		default_font = font;
+		default_font_mutex.unlock();
+	}
+	static void set_default_font(wstring font_name = L"Consolas") {
+		default_font_mutex.lock();
+		if (default_font) DeleteObject(default_font);
+		default_font = CreateFontW(-14, -7, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+			OUT_CHARACTER_PRECIS, CLIP_CHARACTER_PRECIS, DEFAULT_QUALITY, FF_DONTCARE,
+			font_name.c_str());
+		default_font_mutex.unlock();
 	}
 
 private:
@@ -75,12 +110,12 @@ private:
 		}
 	}
 
+protected:
 	// 检查窗口句柄有效性
 	void validate_hwnd() const {
 		if (!hwnd) throw window_not_initialized_exception();
 	}
 
-protected:
 	virtual HWND new_window() {
 		return CreateWindowExW(
 			setup_info->styleEx,
@@ -115,7 +150,7 @@ public:
 		int x = 0,
 		int y = 0,
 		LONG style = WS_OVERLAPPED,
-		LONG styleEx = 0
+		LONG styleEx = WS_EX_CONTROLPARENT
 	) {
 		setup_info = new setup_info_class();
 		setup_info->title = title;
@@ -142,6 +177,7 @@ public:
 			delete setup_info;
 			setup_info = nullptr;
 			managed[hwnd] = this;
+			SendMessageW(hwnd, WM_SETFONT, (WPARAM)get_font(), 0);
 			onCreated();
 		}
 		catch (std::exception& exc) {
@@ -219,12 +255,12 @@ public:
 	// 窗口操作方法
 	void move(int x, int y) {
 		validate_hwnd();
-		SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+		SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 	}
 
 	void resize(int w, int h) {
 		validate_hwnd();
-		SetWindowPos(hwnd, nullptr, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER);
+		SetWindowPos(hwnd, nullptr, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 	}
 
 	void center() {
@@ -253,7 +289,15 @@ public:
 	void set_topmost(bool isTopmost) {
 		validate_hwnd();
 		SetWindowPos(hwnd, isTopmost ? HWND_TOPMOST : HWND_NOTOPMOST,
-			0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+			0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+	}
+
+	void enable(bool enabled = true) {
+		validate_hwnd();
+		EnableWindow(hwnd, enabled);
+	}
+	void disable() {
+		enable(false);
 	}
 
 	void close() {
@@ -284,23 +328,83 @@ public:
 	}
 
 	// 获取系统菜单
-	HMENU sysmenu() {
+	HMENU sysmenu() const {
 		validate_hwnd();
 		return GetSystemMenu(hwnd, FALSE);
 	}
 
+	wstring text() const {
+		validate_hwnd();
+		LRESULT len = SendMessageW(hwnd, WM_GETTEXTLENGTH, 0, 0);
+		wchar_t* buffer = new wchar_t[len + 1];
+		SendMessageW(hwnd, WM_GETTEXT, len + 1, (LPARAM)buffer);
+		wstring text(buffer);
+		delete[] buffer;
+		return text;
+	}
+
+	void text(const std::wstring& text) {
+		validate_hwnd();
+		SendMessageW(hwnd, WM_SETTEXT, 0, (LPARAM)text.c_str());
+	}
+
+	HFONT font() const {
+		return reinterpret_cast<HFONT>(SendMessage(hwnd, WM_GETFONT, 0, 0));
+	}
+
+	void font(HFONT font) {
+		validate_hwnd();
+		SendMessage(hwnd, WM_SETFONT, (WPARAM)font, TRUE);
+	}
+
+	void add_style(LONG_PTR style) {
+		validate_hwnd();
+		LONG_PTR currentStyle = GetWindowLongPtr(hwnd, GWL_STYLE);
+		SetWindowLongPtr(hwnd, GWL_STYLE, currentStyle | style);
+	}
+	void remove_style(LONG_PTR style) {
+		validate_hwnd();
+		LONG_PTR currentStyle = GetWindowLongPtr(hwnd, GWL_STYLE);
+		SetWindowLongPtr(hwnd, GWL_STYLE, currentStyle & ~style);
+	}
+	void add_style_ex(LONG_PTR styleEx) {
+		validate_hwnd();
+		LONG_PTR currentStyleEx = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+		SetWindowLongPtr(hwnd, GWL_EXSTYLE, currentStyleEx | styleEx);
+	}
+	void remove_style_ex(LONG_PTR styleEx) {
+		validate_hwnd();
+		LONG_PTR currentStyleEx = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+		SetWindowLongPtr(hwnd, GWL_EXSTYLE, currentStyleEx & ~styleEx);
+	}
+
+protected:
+	void rewrite_style(LONG_PTR style) {
+		validate_hwnd();
+		SetWindowLongPtr(hwnd, GWL_STYLE, style);
+	}
+	void rewrite_style_ex(LONG_PTR styleEx) {
+		validate_hwnd();
+		SetWindowLongPtr(hwnd, GWL_EXSTYLE, styleEx);
+	}
+
+public:
 	// 发送消息到窗口
-	LRESULT send(UINT msg, WPARAM wParam = 0, LPARAM lParam = 0) {
+	LRESULT send(UINT msg, WPARAM wParam = 0, LPARAM lParam = 0) const {
 		validate_hwnd();
 		return SendMessage(hwnd, msg, wParam, lParam);
 	}
 
+public:
 	// 主消息循环
 	static int run() {
 		MSG msg;
 		while (GetMessage(&msg, nullptr, 0, 0)) {
-			TranslateMessage(&msg);
-			DispatchMessage(&msg);
+			HWND hRootWnd = GetAncestor(msg.hwnd, GA_ROOT);
+			if (!IsDialogMessage(hRootWnd, &msg)) {
+				TranslateMessage(&msg);
+				DispatchMessage(&msg);
+			}
 		}
 		return static_cast<int>(msg.wParam);
 	}
@@ -408,11 +512,16 @@ private:
 };
 
 #pragma region macros to simplify the event handling
-#define WINDOW_EVENT_HANDLER_DECLARE_BEGIN() void setup_event_handlers() override final {
+#define WINDOW_EVENT_HANDLER_DECLARE_BEGIN() void setup_event_handlers() override {
 #define WINDOW_EVENT_HANDLER_DECLARE_END() }
 
-#define WINDOW_add_handler(msg,handler) add_event_handler(msg, [this](WPARAM wParam, LPARAM lParam) { return handler(wParam, lParam); })
-#define WINDOW_add_notification_handler(msg,handler) add_notification_handler(msg, [this](WPARAM wParam, LPARAM lParam) { return handler(wParam, lParam); })
+// Not necessary to super
+#define WINDOW_EVENT_HANDLER_SUPER(base_class) base_class::setup_event_handlers();
+
+#define WINDOW_add_handler(msg,handler) add_event_handler(msg, [this](WPARAM wParam, LPARAM lParam) { return handler(wParam, lParam); });
+#define WINDOW_add_notification_handler(msg,handler) add_notification_handler(msg, [this](WPARAM wParam, LPARAM lParam) { return handler(wParam, lParam); });
+
+//#pragma warning(disable: VCR001) // 未找到"WINDOW_add_handler"的函数定义。
 #pragma endregion
 
 
@@ -441,9 +550,101 @@ protected:
 			nullptr, nullptr, nullptr
 		);
 	}
+	// 注意，对已经注册的Win32控件类，无法使用RegisterClassExW
+	// 也就是说，我们的WndProc将不会被调用
+	// 因此只能使用WINDOW_add_notification_handler而不是WINDOW_add_handler
+	WINDOW_EVENT_HANDLER_DECLARE_BEGIN()
+	WINDOW_EVENT_HANDLER_DECLARE_END()
 };
 
 package foundation declare;
+
+class Static : public BaseSystemWindow {
+public:
+	Static(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0)
+		: BaseSystemWindow(parent, text, width, height, x, y, WS_CHILD | WS_VISIBLE) {
+	}
+	~Static() override {}
+protected:
+	const wstring get_class_name() const override {
+		return L"Static";
+	}
+private:
+	WINDOW_EVENT_HANDLER_DECLARE_BEGIN()
+		WINDOW_EVENT_HANDLER_SUPER(BaseSystemWindow);
+	WINDOW_EVENT_HANDLER_DECLARE_END()
+};
+
+class Edit : public BaseSystemWindow {
+public:
+	Edit(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0)
+		: BaseSystemWindow(parent, text, width, height, x, y, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL) {
+	}
+	~Edit() override {}
+	void onChange(std::function<LRESULT(Edit*)> handler) {
+		onChangeHandler = handler;
+	}
+	void undo() {
+		validate_hwnd();
+		Edit_Undo(hwnd);
+	}
+	void redo() {
+		undo(); // win32控件的迷惑设计。。。参考：https://learn.microsoft.com/zh-cn/windows/win32/controls/em-undo
+	}
+	void max_length(int length) {
+		validate_hwnd();
+		if (length < 0) throw std::invalid_argument("Length must be greater than 0");
+		Edit_LimitText(hwnd, length);
+	}
+	TCHAR password_char() {
+		validate_hwnd();
+		return Edit_GetPasswordChar(hwnd);
+	}
+	void password_char(TCHAR ch) {
+		validate_hwnd();
+		Edit_SetPasswordChar(hwnd, ch);
+	}
+	size_t line_count() {
+		validate_hwnd();
+		return Edit_GetLineCount(hwnd);
+	}
+	wstring get_line(int line) {
+		validate_hwnd();
+		wchar_t* buffer = new wchar_t[16384];
+		Edit_GetLine(hwnd, line, buffer, 16384);
+		wstring text(buffer);
+		delete[] buffer;
+		return text;
+	}
+	bool readonly() {
+		validate_hwnd();
+		return is_readonly;
+	}
+	void readonly(bool readonly = true) {
+		validate_hwnd();
+		Edit_SetReadOnly(hwnd, readonly);
+		is_readonly = readonly;
+	}
+protected:
+	const wstring get_class_name() const override {
+		return L"Edit";
+	}
+private:
+	bool is_readonly = false;
+private:
+	std::function<LRESULT(Edit*)> onChangeHandler;
+	LRESULT onEditChanged(WPARAM wParam, LPARAM lParam) {
+		if (onChangeHandler) {
+			return onChangeHandler(this);
+		}
+		return 0;
+	}
+
+	WINDOW_EVENT_HANDLER_DECLARE_BEGIN()
+		WINDOW_EVENT_HANDLER_SUPER(BaseSystemWindow);
+		WINDOW_add_notification_handler(EN_CHANGE, onEditChanged);
+	WINDOW_EVENT_HANDLER_DECLARE_END()
+};
 
 class Button : public BaseSystemWindow {
 public:
@@ -469,6 +670,7 @@ private:
 
 	// for Win32 controls, we use the notification instead of the event
 	WINDOW_EVENT_HANDLER_DECLARE_BEGIN()
+		WINDOW_EVENT_HANDLER_SUPER(BaseSystemWindow);
 		WINDOW_add_notification_handler(BN_CLICKED, onBtnClicked);
 	WINDOW_EVENT_HANDLER_DECLARE_END()
 };

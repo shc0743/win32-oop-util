@@ -5,6 +5,10 @@
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
+#pragma comment(linker,"\"/manifestdependency:type='win32' \
+name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
+processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+#pragma comment(linker, "/entry:mainCRTStartup /subsystem:windows")
 
 using namespace w32oop;
 using namespace w32oop::foundation;
@@ -15,7 +19,9 @@ protected:
 		return L"myAppClass";
 	}
 protected:
-    Button* myButton=0;
+    Button* myButton;
+    Edit* myTextBox;
+    Static* myResult;
 
 public:
 	MyApp(const wstring& title, int width, int height, int x = 0, int y = 0)
@@ -29,14 +35,28 @@ public:
 protected:
     void onCreated() override {
         // Instead, create the button here
-        myButton = new Button(*this, L"Click me!", 60, 30, 10, 10);
+        myButton = new Button(*this, L"Click me!", 80, 30, 10, 10);
         // although looks ugly, we have to call the create
         myButton->create();
         // set event handler
         myButton->onClick([this](Button* btn) {
-            MessageBoxW(hwnd, L"Button clicked!", L"Notification", MB_OK);
+            MessageBoxW(hwnd, (
+				L"You typed:" + myTextBox->text()).c_str(), L"Notification", MB_OK);
             return 0;
         });
+		// create the edit box
+		myTextBox = new Edit(*this, L"Type here", 200, 30, 100, 10);
+		myTextBox->create();
+		myTextBox->onChange([this](Edit* edit) {
+			// Get the text from the edit box
+			wstring text = edit->text();
+			// Set the text to the static control
+			myResult->text(text);
+			return 0;
+		});
+		// create the static control
+		myResult = new Static(*this, L"Result", 200, 30, 100, 50);
+		myResult->create();
     }
 	LRESULT onClicked(WPARAM wParam, LPARAM lParam) {
 		MessageBoxW(hwnd, L"Window clicked!", L"Notification", MB_OK);
