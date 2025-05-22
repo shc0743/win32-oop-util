@@ -15,42 +15,29 @@ using namespace w32oop::foundation;
 
 namespace MyDemo {
 
-    class HotKeyMixedAppDemo : public Window {
+    class HotKeySystemwideAppDemo : public Window {
     protected:
         Static *text;
 
     public:
-        HotKeyMixedAppDemo(const wstring& title, int width, int height, int x = 0, int y = 0)
+        HotKeySystemwideAppDemo(const wstring& title, int width, int height, int x = 0, int y = 0)
             : Window(title, width, height, x, y, WS_OVERLAPPEDWINDOW)
         {
             // Do not initialize the button here
         }
-        ~HotKeyMixedAppDemo() override {
+        ~HotKeySystemwideAppDemo() override {
             if (text) delete text;
         }
     protected:
         void onCreated() override {
             text = new Static(hwnd, L"Result will show here...", 400, 30);
             text->create();
-            register_hot_key(true, false, false, 'A', [&](HotKeyProcData &data) {
-                data.preventDefault();
-                // Be careful! When the Hook is globally hooked
-                // the event handling will vary!
-                // The wParam and lParam's meaning is different.
-                if (!data.pKbdStruct) return; 
-                // Do not block the hook proc thread
-                std::thread([&] {
-                    text->text(L"Ctrl+A is pressed Windowed");
-                    Sleep(1000);
-                    text->text(L"Result will show here...");
-                }).detach();
-            });
-            register_hot_key(true, false, false, 'A', [&](HotKeyProcData &data) {
+            register_hot_key(true, true, false, 'U', [&](HotKeyProcData &data) {
                 data.preventDefault();
                 if (!data.pKbdStruct) return;
-                // Do not block the hook proc thread
+                // Do not block the hook proc thread! (Especially when the Hook is globally hooked)
                 std::thread([&] {
-                    text->text(L"Ctrl+A is pressed Systemwide");
+                    text->text(L"Ctrl+Alt+U is pressed!");
                     Sleep(1000);
                     text->text(L"Result will show here...");
                 }).detach();
@@ -67,7 +54,7 @@ namespace MyDemo {
             }
             RECT rect;
             GetClientRect(hwnd, &rect);
-            DrawTextW(hdc, L"Try to press Ctrl+A in your OS and window", -1, &rect, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
+            DrawTextW(hdc, L"Try to press Ctrl+Alt+U in your OS", -1, &rect, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
             if (hOldFont) {
                 SelectObject(hdc, hOldFont);
             }
@@ -90,7 +77,7 @@ namespace MyDemo {
 int main() { 
     Window::set_global_option(Window::Option_DebugMode, true);
     // create the application
-    MyDemo::HotKeyMixedAppDemo app(L"HotKey Application (Mixed)", 640, 480);
+    MyDemo::HotKeySystemwideAppDemo app(L"HotKey Application (Systemwide)", 640, 480);
     // create it
     app.create();
     // set the main window
@@ -99,12 +86,9 @@ int main() {
     app.center();
     // show it
     app.show();
-    // // Set option to allow the hotkey
-    // app.set_global_option(Window::Option_EnableHotkey, true);
-    // app.set_global_option(Window::Option_EnableGlobalHotkey, true);
-    // Not necessary, because we *created* window **BEFORE** calling Window::run()
-    // However, if you want to create the window after calling Window::run(), you need to set
-    // the option manually.
+    // Set option to allow the hotkey
+    app.set_global_option(Window::Option_EnableHotkey, true);
+    app.set_global_option(Window::Option_EnableGlobalHotkey, true);
     // message loop
     return Window::run();
 }

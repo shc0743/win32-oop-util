@@ -33,7 +33,7 @@ namespace MyDemo {
                 if (!data.pKbdStruct) return;
                 // Do not block the hook proc thread! (Especially when the Hook is globally hooked)
                 std::thread([&] {
-                    MessageBoxW(hwnd, L"Ctrl+Alt+U is pressed!", L"Notification", MB_OK | MB_SERVICE_NOTIFICATION); // ensure top-most
+                    MessageBoxW(hwnd, L"Ctrl+Alt+U is pressed!", L"Notification", MB_OK | MB_TOPMOST); // ensure top-most
                 }).detach();
             }, Window::HotKeyOptions::System);
         }
