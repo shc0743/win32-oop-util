@@ -413,6 +413,7 @@ LRESULT Window::keyboard_proc(
 			data.wParam = wParam;
 			data.lParam = lParam;
 			data.pKbdStruct = nullptr;
+			data.source = pair.first.source;
 			pair.second(data);
 			if (prevented) return 1;
 			return CallNextHookEx(_hHook, code, wParam, lParam);
@@ -454,7 +455,8 @@ LRESULT Window::keyboard_proc_LL(
 			data.wParam = wParam;
 			data.lParam = lParam;
 			data.pKbdStruct = p;
-            pair.second(data);
+			data.source = pair.first.source;
+			pair.second(data);
 			if (prevented) return 1;
 			return CallNextHookEx(_hHook, code, wParam, lParam);
 		}
@@ -572,9 +574,13 @@ LRESULT Window::destroy_handler_internal(UINT msg, WPARAM wParam, LPARAM lParam)
 	// cleanups
 	onDestroy();
 	if (is_main_window) {
+		// 确保正确退出
 		PostQuitMessage(0);
 	}
 	auto result = DefWindowProc(hwnd, msg, wParam, lParam);
+	// 必须清理钩子！
+	remove_all_hot_key_on_window();
+	// 清理 managed
 	if (managed.contains(hwnd)) {
 		managed.erase(hwnd);
 	}
@@ -673,5 +679,5 @@ HWND BaseSystemWindow::new_window() {
 #pragma endregion
 
 const char* version_string() {
-	return "w32oop::version_string 5.6.3.0 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
+	return "w32oop::version_string 5.6.4.0 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
 }

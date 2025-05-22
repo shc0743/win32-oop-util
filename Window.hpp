@@ -42,7 +42,7 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50603000; // 5.6.3.0
+constexpr long version = 50604000; // 5.6.4.0
 const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
@@ -145,6 +145,7 @@ protected:
 		WPARAM wParam = 0;
 		LPARAM lParam = 0;
 		PKBDLLHOOKSTRUCT pKbdStruct = nullptr;
+		Window* source = nullptr;
 	};
 private:
 	static unordered_map<HWND, Window*> managed; // Internal -- DO NOT access it
