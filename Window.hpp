@@ -42,13 +42,16 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50602000; // 5.6.2.0
+constexpr long version = 50603000; // 5.6.3.0
+const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
 declare_exception(window_already_initialized);
 declare_exception(window_class_registration_failure);
 declare_exception(window_creation_failure);
 declare_exception(window_has_no_parent);
+declare_exception(window_dangerous_thread_operation);
+declare_exception(window_hotkey_duplication);
 
 class Window;
 
@@ -57,13 +60,15 @@ public:
 	EventData() {
 		hwnd = 0;
 		message = 0;
-        wParam = 0;
-        lParam = 0;
+		wParam = 0;
+		lParam = 0;
 		bubble = false;
 		isTrusted = false;
 		isPreventedDefault = false;
 		isStoppedPropagation = false;
 		isNotification = false;
+		result = 0;
+		_source = nullptr;
 	};
 	~EventData() = default;
 public:
@@ -74,6 +79,7 @@ public:
 	bool bubble;
 private:
 	bool isTrusted;
+	Window* _source;
 public:
 	function<void(LRESULT)> returnValue;
 	function<void()> preventDefault;
@@ -81,11 +87,14 @@ public:
 private:
 	LRESULT result;
 	bool isPreventedDefault;
-    bool isStoppedPropagation;
+	bool isStoppedPropagation;
 	bool isNotification;
 public:
 	bool is_notification() const {
 		return isNotification;
+	}
+	Window* source() const {
+		return _source;
 	}
 public:
 	friend class Window;
@@ -97,19 +106,54 @@ constexpr UINT WM_MENU_CHECKED = WM_USER + WM_MENUCOMMAND + 0xFFFFFF;
 
 
 class Window {
-private:
-	static unordered_map<HWND, Window*> managed; // Internal -- DO NOT access it
-	static recursive_mutex default_font_mutex;
-	static HFONT default_font;
+public:
 	enum GlobalOptions {
 		Option_Unknown = 0,
 		Option_DebugMode,
 		Option_DisableDialogWindowHandling,
 		Option_DisableAcceleratorHandling,
-		Option_DisableHotkey,
 		Option_HACCEL,
+		Option_EnableHotkey,
+		Option_EnableGlobalHotkey,
 	};
+protected:
+	class HotKeyOptions {
+	public:
+		bool ctrl = false;
+        bool shift = false;
+        bool alt = false;
+		int vk = 0;
+		enum Scope {
+			Thread,
+			System
+		};
+		Scope scope = Thread;
+		bool operator<(const HotKeyOptions& other) const {
+			if (ctrl != other.ctrl) return ctrl < other.ctrl;
+			if (shift != other.shift) return shift < other.shift;
+			if (alt != other.alt) return alt < other.alt;
+			if (vk != other.vk) return vk < other.vk;
+			return scope < other.scope;
+		}
+	protected:
+		Window* source = nullptr;
+		friend class Window;
+	};
+	class HotKeyProcData {
+	public:
+		function<void()> preventDefault;
+		WPARAM wParam = 0;
+		LPARAM lParam = 0;
+		PKBDLLHOOKSTRUCT pKbdStruct = nullptr;
+	};
+private:
+	static unordered_map<HWND, Window*> managed; // Internal -- DO NOT access it
+	static recursive_mutex default_font_mutex;
+	static HFONT default_font;
 	static map<GlobalOptions, long long> global_options;
+	static map<HotKeyOptions, function<void(HotKeyProcData&)>> hotkey_handlers;
+	static std::recursive_mutex hotkey_handlers_mutex;
+
 protected:
 	HWND hwnd = nullptr; // 窗口句柄
 	
@@ -152,6 +196,7 @@ public:
 private:
 	wstring class_name;
 	virtual void register_class_if_needed() final;
+	DWORD _owner = 0;
 
 protected:
 	// 检查窗口句柄有效性
@@ -169,9 +214,12 @@ protected:
 		LONG style, styleEx;
 	} *setup_info;
 
+	virtual void transfer_ownership() final {
+		_owner = GetCurrentThreadId();
+	}
+
 private:
 	bool _created = false;
-
 	bool is_main_window = false;
 
 public:
@@ -207,6 +255,10 @@ public:
 		return hwnd;
 	}
 
+	virtual DWORD owner() const final {
+		return _owner;
+	}
+
 public:
 	virtual void create() final;
 
@@ -217,7 +269,7 @@ public:
 	}
 
 	virtual Window& parent() final {
-        validate_hwnd();
+		validate_hwnd();
 		HWND parent = GetParent(hwnd);
 		if (managed.contains(parent)) return *(managed.at(parent));
 		throw window_has_no_parent_exception();
@@ -294,13 +346,14 @@ protected:
 public:
 	// 发送消息到窗口
 	virtual LRESULT send(UINT msg, WPARAM wParam = 0, LPARAM lParam = 0) const;
+	// 简化的事件模型，暂时只有冒泡（bubble）模式，不支持捕获（capture）模式
 	virtual LRESULT dispatchEvent(EventData data) final;
-	// 简化的事件模型，只有冒泡（bubble）模式，不支持捕获（capture）模式
 private:
 	virtual LRESULT dispatchEvent(EventData& data, bool isTrusted, bool shouldBubble) final;
 	virtual void dispatchEventForWindow(EventData& data) final;
 public:
-	// 主消息循环
+	// 主消息循环。**必须**使用此函数，而不是自定义的消息循环，
+	// 因为此函数将处理一些内部细节
 	static int run();
 
 protected:
@@ -312,7 +365,9 @@ private:
 	static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	// 消息处理函数
 	LRESULT WndProc(UINT msg, WPARAM wParam, LPARAM lParam);
-	static LRESULT dispatchMessageToWindowAndGetResult(Window& window, UINT msg, WPARAM wParam, LPARAM lParam, bool isNotification = false);
+	LRESULT dispatchMessageToWindowAndGetResult(UINT msg, WPARAM wParam, LPARAM lParam, bool isNotification = false);
+
+	LRESULT destroy_handler_internal(UINT msg, WPARAM wParam, LPARAM lParam);
 
 	using EventRouter = unordered_map<UINT,
 		std::vector<
@@ -321,32 +376,15 @@ private:
 	>;
 	EventRouter router;
 	recursive_mutex router_lock;
-#if 0
-	EventRouter* notification_router;
-#endif
 
 protected:
 	// 注册事件处理器
-#if 0
-	template <typename Callable>
-	void add_event_handler(UINT msg, const Callable &handler) {
-		if (!router.contains(msg)) {
-			// 如果消息不存在，创建一个新的消息处理函数列表
-			router.insert(std::make_pair(msg, std::vector<Callable>()));
+	virtual void addEventListener(UINT msg, const function<void(EventData&)>& handler) final {
+		if (GetCurrentThreadId() != _owner) {
+			throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
 		}
-		router->at(msg).push_back((handler));
-	}
-	template <typename Callable>
-	void add_notification_handler(UINT msg, const Callable& handler) {
-		if (!notification_router->contains(msg)) {
-			// 如果消息不存在，创建一个新的消息处理函数列表
-			notification_router->insert(std::make_pair(msg, std::vector<Callable>()));	
-		}
-		notification_router->at(msg).push_back(handler);
-	}
-#else
-	void addEventListener(UINT msg, const function<void(EventData&)>& handler) {
-		router_lock.lock();
+		lock_guard gg(router_lock);
+
 		try {
 			if (!router.contains(msg)) {
 				// 如果消息不存在，创建一个新的消息处理函数列表
@@ -354,61 +392,93 @@ protected:
 				router.insert(std::make_pair<UINT, vector<function<void(EventData&)>>>(std::move(msg2), std::vector<function<void(EventData&)>>()));
 			}
 			router.at(msg).push_back((handler));
-			router_lock.unlock();
 		}
 		catch (...) {
-			router_lock.unlock();
 			throw;
 		}
 	}
-	void removeEventListener(UINT msg) {
-		router_lock.lock();
+	virtual void removeEventListener(UINT msg) final {
+		if (GetCurrentThreadId() != _owner) {
+			throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
+		}
+		lock_guard gg(router_lock);
 		if (!router.contains(msg)) return;
 		// 清除指定的消息处理函数列表
 		router.erase(msg);
-		router_lock.unlock();
 	}
-	template <typename Callable>
-	void removeEventListener(UINT msg, const Callable& handler) {
-		router_lock.lock();
-		if (!router.contains(msg)) {
-			router_lock.unlock();
+	virtual void removeEventListener(UINT msg, const function<void(EventData&)>& handler) final {
+		if (GetCurrentThreadId() != _owner) {
+			throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
+		}
+		lock_guard gg(router_lock);
+		if (!router.contains(msg)) return;
+		auto& handlers = router.at(msg);
+		// 查找匹配的 handler
+		auto it = std::find_if(handlers.begin(), handlers.end(),
+			[&handler](const auto& func) {
+				// 比较两个 std::function 是否指向相同的可调用对象
+				return func.target_type() == handler.target_type() &&
+					func.target<void(EventData&)>() == handler.target<void(EventData&)>();
+			});
+		if (it == handlers.end()) return; // 没找到
+		if (handlers.size() == 1) {
+			removeEventListener(msg); // 如果只有一个处理器，直接清空消息处理函数列表
 			return;
 		}
-		try {
-			auto& handlers = router.at(msg);
-			// 查找匹配的 handler
-			auto it = std::find_if(handlers.begin(), handlers.end(),
-				[&handler](const auto& func) {
-					// 比较两个 std::function 是否指向相同的可调用对象
-					return func.target_type() == handler.target_type() &&
-						func.target<void(EventData&)>() == handler.target<void(EventData&)>();
-				});
-			if (it == handlers.end()) return; // 没找到
-			if (handlers.size() == 1) {
-				router_lock.unlock();
-				removeEventListener(msg); // 如果只有一个处理器，直接清空消息处理函数列表
-				return;
-			}
-			// 如果有多个处理器，移除指定的处理器
-			handlers.erase(it);
-			router_lock.unlock();
-		}
-		catch (...) {
-			router_lock.unlock();
-			throw;
-		}
+		// 如果有多个处理器，移除指定的处理器
+		handlers.erase(it);
 	}
-#endif
 
 	virtual void setup_event_handlers() = 0;
 
 private:
-#if 0
-	LRESULT process_notification(WPARAM wParam, LPARAM lParam);
-	LRESULT process_command(WPARAM wParam, LPARAM lParam);
-#else
-#endif
+	// 快捷键相关功能
+	static bool hotkey_handler_contains(bool ctrl, bool shift, bool alt, int vk_code, HotKeyOptions::Scope scope);
+	static LRESULT CALLBACK keyboard_proc(
+		_In_ int    code,
+		_In_ WPARAM wParam,
+		_In_ LPARAM lParam
+	);
+	static LRESULT CALLBACK keyboard_proc_LL(
+		_In_ int    code,
+		_In_ WPARAM wParam,
+		_In_ LPARAM lParam
+	);
+	static HHOOK _hHook;
+	static DWORD message_loop_thread_id;
+protected:
+	// 注意：快捷键支持必须
+	// - 要么在 Window::run() 之前调用register_hot_key
+	// - 要么提前设置 Window::set_global_option(
+	//		Window::Option_EnableHotkey （或者如果应用程序需要使用全局快捷键，还需要设置Option_EnableGlobalHotkey）
+	//   , true)
+	// 否则快捷键将不会生效，因为SetWindowsHookEx在Window::run开头被调用。
+	// 出于性能考虑，我们默认不会启用快捷键（因为SetWindowsHookEx有性能开销）
+	// 因此如果需要使用快捷键功能，请务必注意调用顺序。
+	// 
+	// 备注：register_hot_key内部会自动设置Option_EnableHotkey为true，因此若**在Window::run之前**
+	// 调用register_hot_key，则不需要再调用set_global_option。
+	// 如果是运行时添加快捷键，则需要提前调用set_global_option。
+	virtual void register_hot_key(
+		bool ctrl, bool alt, bool shift,
+		int vk_code,
+		function<void(HotKeyProcData&)> callback,
+		HotKeyOptions::Scope scope = HotKeyOptions::Scope::Thread
+	) final;
+	virtual void remove_hot_key(
+		bool ctrl, bool alt, bool shift,
+		int vk_code
+	) final {
+		remove_hot_key(ctrl, alt, shift, vk_code, HotKeyOptions::Scope::Thread);
+		remove_hot_key(ctrl, alt, shift, vk_code, HotKeyOptions::Scope::System);
+	}
+	virtual void remove_hot_key(
+		bool ctrl, bool alt, bool shift,
+		int vk_code,
+		HotKeyOptions::Scope scope
+	) final;
+	virtual void remove_all_hot_key_on_window() final;
+	virtual void remove_all_hot_key_global() final;
 };
 
 #pragma region macros to simplify the event handling
@@ -425,7 +495,6 @@ private:
 #define WINDOW_EVENT_HANDLER_SUPER(base_class) base_class::setup_event_handlers();
 
 #define WINDOW_add_handler(msg,handler) addEventListener(msg, [this](EventData& data) { if (data.hwnd != this->hwnd) return;handler(data); });
-//#define WINDOW_add_notification_handler(msg,handler) add_notification_handler(msg, [this](WPARAM wParam, LPARAM lParam) { return handler(wParam, lParam); });
 #define WINDOW_add_notification_handler(msg,handler) addEventListener((::w32oop::WINDOW_NOTIFICATION_CODES) + (msg), [this](EventData& data) { if (data.hwnd != this->hwnd || (!data.is_notification())) return;handler(data); });
 #pragma endregion
 
@@ -447,6 +516,20 @@ protected:
 	// 也就是说，我们的WndProc将不会被调用
 	// 因此只能使用WINDOW_add_notification_handler而不是WINDOW_add_handler
 	virtual void setup_event_handlers() override {}
+
+public:
+	using CEventHandler = function<void(EventData&)>;
+	virtual BaseSystemWindow& on(UINT event, CEventHandler handler) {
+		addEventListener((::w32oop::WINDOW_NOTIFICATION_CODES)+(event),
+			[&](EventData& data) {
+				if (data.hwnd != this->hwnd || (!data.is_notification())) return; handler(data);
+			});;
+		return *this;
+	}
+	virtual BaseSystemWindow& un(UINT event) {
+		removeEventListener((::w32oop::WINDOW_NOTIFICATION_CODES)+(event));
+		return *this;
+	}
 };
 
 package foundation declare;
@@ -473,7 +556,7 @@ public:
 		: BaseSystemWindow(parent, text, width, height, x, y, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL) {
 	}
 	~Edit() override {}
-	void onChange(std::function<LRESULT(Edit*)> handler) {
+	void onChange(CEventHandler handler) {
 		onChangeHandler = handler;
 	}
 	void undo() {
@@ -524,10 +607,11 @@ protected:
 private:
 	bool is_readonly = false;
 private:
-	std::function<LRESULT(Edit*)> onChangeHandler;
+	CEventHandler onChangeHandler;
 	void onEditChanged(EventData& data) {
 		if (onChangeHandler) {
-			data.returnValue(onChangeHandler(this));
+			data.preventDefault();
+			onChangeHandler(data);
 		}
 	}
 
@@ -543,7 +627,7 @@ public:
 		: BaseSystemWindow(parent, text, width, height, x, y, WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP) {
 	}
 	~Button() override {}
-	void onClick(std::function<LRESULT(Button*)> handler) {
+	void onClick(CEventHandler handler) {
 		onClickHandler = handler;
 	}
 protected:
@@ -551,10 +635,11 @@ protected:
 		return L"Button";
 	}
 private:
-	std::function<LRESULT(Button*)> onClickHandler;
+	CEventHandler onClickHandler;
 	void onBtnClicked(EventData& data) {
 		if (onClickHandler) {
-			data.returnValue(onClickHandler(this));
+			data.preventDefault();
+			onClickHandler(data);
 		}
 	}
 

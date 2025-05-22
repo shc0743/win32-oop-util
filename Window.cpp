@@ -20,6 +20,11 @@ unordered_map<HWND, Window*> Window::managed;
 map<Window::GlobalOptions, long long> Window::global_options;
 HFONT Window::default_font;
 std::recursive_mutex Window::default_font_mutex;
+map<Window::HotKeyOptions, function<void(Window::HotKeyProcData&)>> Window::hotkey_handlers;
+std::recursive_mutex Window::hotkey_handlers_mutex;
+HHOOK Window::_hHook;
+DWORD Window::message_loop_thread_id;
+
 
 const wstring Window::get_class_name() const
 {
@@ -124,6 +129,7 @@ Window& Window::operator=(Window&& other) noexcept {
 
 void Window::create() {
 	if (_created) throw window_already_initialized_exception();
+	transfer_ownership();
 	try {
 		setup_event_handlers();
 	}
@@ -147,6 +153,9 @@ void Window::create() {
 	catch (std::exception& exc) {
 		DestroyWindow(hwnd);
 		hwnd = nullptr;
+		if (get_global_option(Option_DebugMode)) {
+			fprintf(stderr, "Cannot create window!! %s\n", exc.what());
+		}
 		throw exc;
 	}
 }
@@ -276,11 +285,7 @@ LRESULT Window::dispatchEvent(EventData& data, bool isTrusted, bool shouldBubble
 }
 
 void Window::dispatchEventForWindow(EventData& data) {
-	router_lock.lock();
-	if (!router.contains(data.message)) {
-		router_lock.unlock();
-		return;
-	}
+	if (!router.contains(data.message)) return;
 	try {
 		auto& handlers = router.at(data.message);
 		for (auto& handler : handlers) {
@@ -295,13 +300,16 @@ void Window::dispatchEventForWindow(EventData& data) {
 					fwrite(what.c_str(), sizeof(decltype(what)::value_type), what.size(), stderr);
 					DebugBreak();
 				}
-				throw e;
+				throw;
 			}
 		}
-		router_lock.unlock();
+	}
+	catch (out_of_range&) {
+		// 消息路由被外部修改了。这种情况应该不会出现
+		return;
 	}
 	catch (...) {
-		router_lock.unlock();
+		// 其他异常
 		throw;
 	}
 }
@@ -311,12 +319,6 @@ Window::~Window() {
 		delete setup_info;
 		setup_info = nullptr;
 	}
-#if 0
-	if (notification_router) {
-		delete notification_router;
-		notification_router = nullptr;
-	}
-#endif
 	if (!hwnd) return;
 	if (managed.contains(hwnd)) {
 		managed.erase(hwnd);
@@ -324,13 +326,44 @@ Window::~Window() {
 	destroy();
 }
 
+namespace w32oop {
+	class windowRunHookManager {
+	public:
+		HHOOK hHook;
+        windowRunHookManager() : hHook(nullptr) {}
+		~windowRunHookManager() {
+			if (hHook) UnhookWindowsHookEx(hHook);
+		}
+	};
+}
+
 int Window::run() {
 	MSG* lpMsg = new MSG;
+	windowRunHookManager hookManager;
+	message_loop_thread_id = GetCurrentThreadId();
 	try {
 		bool dialogHandling = !get_global_option(Option_DisableDialogWindowHandling);
 		bool acceleratorHandling = !get_global_option(Option_DisableAcceleratorHandling);
 		HACCEL acceleratorTable = reinterpret_cast<HACCEL>(get_global_option(Option_HACCEL));
 		if (!acceleratorTable) acceleratorHandling = false;
+
+		// 设置hook
+		if (get_global_option(Option_EnableHotkey) || get_global_option(Option_EnableGlobalHotkey)) {
+			DWORD dwThreadId = (get_global_option(Option_EnableGlobalHotkey) ? 0 : GetCurrentThreadId());
+			int idHook = (get_global_option(Option_EnableGlobalHotkey) ? WH_KEYBOARD_LL : WH_KEYBOARD);
+			HOOKPROC proc = (get_global_option(Option_EnableGlobalHotkey) ? keyboard_proc_LL : keyboard_proc);
+			hookManager.hHook = SetWindowsHookExW(
+				idHook, proc, GetModuleHandleW(NULL), dwThreadId
+			);
+			if (!hookManager.hHook) {
+				if (get_global_option(Option_DebugMode)) {
+					fprintf(stderr, "[Window] SetWindowsHookExW failed: %d\n", GetLastError());
+					DebugBreak();
+				}
+			}
+			_hHook = hookManager.hHook;
+		}
+
 		HWND hRootWnd = NULL;
 		while (GetMessageW(lpMsg, nullptr, 0, 0)) {
 			if (dialogHandling || acceleratorHandling) hRootWnd = GetAncestor(lpMsg->hwnd, GA_ROOT);
@@ -348,10 +381,85 @@ int Window::run() {
 		delete lpMsg;
 		return returnValue;
 	}
-	catch (const std::exception& e) {
+	catch (const std::exception&) {
 		delete lpMsg;
-		throw e;
+		throw;
 	}
+}
+
+LRESULT Window::keyboard_proc(
+	_In_ int    code,
+	_In_ WPARAM wParam,
+	_In_ LPARAM lParam
+) {
+	lock_guard lock(hotkey_handlers_mutex);
+	// 如果 代码 小于零，挂钩过程必须将消息传递给 CallNextHookEx 函数，而无需进一步处理，并且应返回 CallNextHookEx 返回的值。
+	// https://learn.microsoft.com/zh-cn/windows/win32/winmsg/keyboardproc
+	if (code < 0) {
+		return CallNextHookEx(_hHook, code, wParam, lParam);
+	}
+	int key = (int)wParam;
+	bool
+		ctrl = GetAsyncKeyState(VK_CONTROL) & 0x8000,
+		shift = GetAsyncKeyState(VK_SHIFT) & 0x8000,
+		alt = ((lParam & (static_cast<long long>(1) << 29)) != 0);
+	for (auto& pair : hotkey_handlers) {
+		if (pair.first.ctrl == ctrl && pair.first.shift == shift && pair.first.alt == alt && pair.first.vk == key) {
+			HotKeyProcData data;
+			bool prevented = false;
+			data.preventDefault = [&prevented]() {
+				prevented = true;
+			};
+			data.wParam = wParam;
+			data.lParam = lParam;
+			data.pKbdStruct = nullptr;
+			pair.second(data);
+			if (prevented) return 1;
+			return CallNextHookEx(_hHook, code, wParam, lParam);
+		}
+	}
+	return CallNextHookEx(_hHook, code, wParam, lParam);
+}
+
+LRESULT Window::keyboard_proc_LL(
+	_In_ int    code,
+	_In_ WPARAM wParam,
+	_In_ LPARAM lParam
+) {
+	lock_guard lock(hotkey_handlers_mutex);
+	// 如果 代码 小于零，挂钩过程必须将消息传递给 CallNextHookEx 函数，而无需进一步处理，并且应返回 CallNextHookEx 返回的值。
+	// https://learn.microsoft.com/zh-cn/windows/win32/winmsg/keyboardproc
+	if ((code < 0) || (wParam != WM_KEYDOWN && wParam != WM_SYSKEYDOWN)) {
+		return CallNextHookEx(_hHook, code, wParam, lParam);
+	}
+	PKBDLLHOOKSTRUCT p = reinterpret_cast<PKBDLLHOOKSTRUCT>(lParam);
+	int vk = p->vkCode;
+	bool 
+		ctrl = GetAsyncKeyState(VK_CONTROL) & 0x8000,
+        shift = GetAsyncKeyState(VK_SHIFT) & 0x8000,
+        alt = GetAsyncKeyState(VK_MENU) & 0x8000;
+	for (auto& pair : hotkey_handlers) {
+		if (pair.first.ctrl == ctrl && pair.first.shift == shift && pair.first.alt == alt && pair.first.vk == vk) {
+			if (pair.first.scope == HotKeyOptions::Thread) {
+				HWND currentWindow = GetForegroundWindow();
+				if (!currentWindow) continue;
+				DWORD tid = GetWindowThreadProcessId(currentWindow, NULL);
+				if (tid != message_loop_thread_id) continue;
+			}
+			HotKeyProcData data;
+			bool prevented = false;
+			data.preventDefault = [&prevented]() {
+				prevented = true;
+			};
+			data.wParam = wParam;
+			data.lParam = lParam;
+			data.pKbdStruct = p;
+            pair.second(data);
+			if (prevented) return 1;
+			return CallNextHookEx(_hHook, code, wParam, lParam);
+		}
+	}
+	return CallNextHookEx(_hHook, code, wParam, lParam);
 }
 
 void Window::onCreated() {}
@@ -382,16 +490,7 @@ LRESULT Window::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
 	if (!hwnd) return 0;
 	if (msg == WM_DESTROY) {
 		// 窗口被销毁
-		onDestroy();
-		if (is_main_window) {
-			PostQuitMessage(0);
-		}
-		auto result = DefWindowProc(hwnd, msg, wParam, lParam);
-		if (managed.contains(hwnd)) {
-			managed.erase(hwnd);
-		}
-        hwnd = nullptr;
-		return result;
+		return destroy_handler_internal(msg, wParam, lParam);
 	}
 	// 处理窗口消息
 	// 首先判断特殊的窗口消息，检查源窗口到底是哪个
@@ -403,7 +502,7 @@ LRESULT Window::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
 			if (lParam == 0) {
 				// “菜单”或者“加速器”（也就是快捷键）消息
 				auto id = lo;
-				return dispatchMessageToWindowAndGetResult(*this, WM_MENU_CHECKED, id, 0);
+				return dispatchMessageToWindowAndGetResult(WM_MENU_CHECKED, id, 0);
 			}
 			// 来自控件的通知代码。
 			// 此时消息实际上并不是我们的窗口，而是控件的窗口。
@@ -431,7 +530,7 @@ LRESULT Window::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 		try {
 			Window* target = managed.at(targetWindow);
-			return dispatchMessageToWindowAndGetResult(*target, UINT(notifCode + WINDOW_NOTIFICATION_CODES), (UINT)msg, lParam, true);
+			return target->dispatchMessageToWindowAndGetResult(UINT(notifCode + WINDOW_NOTIFICATION_CODES), (UINT)msg, lParam, true);
 		}
 		catch (std::out_of_range&) {
 			// 找不到对应的窗口
@@ -440,18 +539,19 @@ LRESULT Window::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
 	}
 	// 现在源窗口应该就是我们的窗口了。
 	// 直接处理
-	return dispatchMessageToWindowAndGetResult(*this, msg, wParam, lParam, false);
+	return dispatchMessageToWindowAndGetResult(msg, wParam, lParam, false);
 }
 
-LRESULT Window::dispatchMessageToWindowAndGetResult(Window& window, UINT msg, WPARAM wParam, LPARAM lParam, bool isNotification) {
+LRESULT Window::dispatchMessageToWindowAndGetResult(UINT msg, WPARAM wParam, LPARAM lParam, bool isNotification) {
 	// 构造EventData
 	EventData data;
-	data.hwnd = window;
+	data.hwnd = hwnd;
     data.message = msg;
     data.wParam = wParam;
     data.lParam = lParam;
 	data.isNotification = isNotification;
 	data.bubble = data.isNotification; // 只有通知消息才冒泡，否则会出现问题
+	data._source = this;
 	
 	// 设置处理程序
 	data.returnValue = [&](LRESULT value) {
@@ -465,42 +565,93 @@ LRESULT Window::dispatchMessageToWindowAndGetResult(Window& window, UINT msg, WP
 	};
 
 	// 分发消息
-	return window.dispatchEvent(data, true, data.bubble);
+	return dispatchEvent(data, true, data.bubble);
 }
 
-#if 0
-LRESULT Window::process_notification(WPARAM wParam, LPARAM lParam) {
-	NMHDR* pNMHDR = (NMHDR*)lParam;
-	if (!pNMHDR) return DefWindowProc(hwnd, WM_NOTIFY, wParam, lParam);
+LRESULT Window::destroy_handler_internal(UINT msg, WPARAM wParam, LPARAM lParam) {
+	// cleanups
+	onDestroy();
+	if (is_main_window) {
+		PostQuitMessage(0);
+	}
+	auto result = DefWindowProc(hwnd, msg, wParam, lParam);
+	if (managed.contains(hwnd)) {
+		managed.erase(hwnd);
+	}
+	hwnd = nullptr;
+	return result;
+}
 
-	HWND hWndFrom = pNMHDR->hwndFrom;
-	if (managed.contains(hWndFrom)) {
-		Window* target = managed.at(hWndFrom);
-		auto target_router = target->notification_router;
-		if (target_router->contains(pNMHDR->code)) {
-			auto& handler = target_router->at(pNMHDR->code);
-			return handler(wParam, lParam);
+
+bool Window::hotkey_handler_contains(bool ctrl, bool shift, bool alt, int vk_code, HotKeyOptions::Scope scope) {
+	lock_guard lock(hotkey_handlers_mutex);
+	for (auto& pair : hotkey_handlers) {
+		auto& item = pair.first;
+        if (item.ctrl == ctrl && item.alt == alt && item.shift == shift && item.vk == vk_code && item.scope == scope) {
+			return true;
 		}
 	}
-
-	return DefWindowProc(hwnd, WM_NOTIFY, wParam, lParam);
+    return false;
 }
 
-LRESULT Window::process_command(WPARAM wParam, LPARAM lParam) {
-	HWND hWndFrom = (HWND)(ULONG_PTR)lParam;
-	if (managed.contains(hWndFrom)) {
-		Window* target = managed.at(hWndFrom);
-		auto target_router = target->notification_router;
-		if (target_router->contains(HIWORD(wParam))) {
-			auto& handler = target_router->at(HIWORD(wParam));
-			return handler(wParam, lParam);
-		}
+void Window::register_hot_key(
+	bool ctrl, bool alt, bool shift, int vk_code,
+	function<void(HotKeyProcData&)> callback, HotKeyOptions::Scope scope
+) {
+	if (!get_global_option(Option_EnableHotkey))
+		set_global_option(Option_EnableHotkey, true);
+	if (scope == HotKeyOptions::Scope::System) {
+		if (!get_global_option(Option_EnableGlobalHotkey))
+            set_global_option(Option_EnableGlobalHotkey, true);
 	}
 
-	return 1;
+	HotKeyOptions options;
+    options.ctrl = ctrl;
+    options.alt = alt;
+    options.shift = shift;
+    options.vk = vk_code;
+    options.scope = scope;
+	options.source = this;
+
+	lock_guard lock(hotkey_handlers_mutex);
+	if (hotkey_handler_contains(ctrl, alt, shift, vk_code, scope)) {
+		throw window_hotkey_duplication_exception();
+	}
+    hotkey_handlers.insert(make_pair(options, callback));
 }
-#else
-#endif
+
+void Window::remove_hot_key(bool ctrl, bool alt, bool shift, int vk_code, HotKeyOptions::Scope scope) {
+	lock_guard lock(hotkey_handlers_mutex);
+	if (!hotkey_handler_contains(ctrl, alt, shift, vk_code, scope)) {
+		return;
+	}
+	for (auto& pair : hotkey_handlers) {
+		if (pair.first.ctrl == ctrl && pair.first.alt == alt && pair.first.shift == shift && pair.first.vk == vk_code && pair.first.scope == scope) {
+            hotkey_handlers.erase(pair.first);
+			break;
+		}
+	}
+}
+
+void Window::remove_all_hot_key_on_window() {
+	lock_guard lock(hotkey_handlers_mutex);
+	auto it = hotkey_handlers.begin();
+	while (it != hotkey_handlers.end()) {
+		if (it->first.source == this) {
+			// 安全地移除元素并获取下一个有效的迭代器
+			it = hotkey_handlers.erase(it);
+		}
+		else {
+			++it;
+		}
+	}
+}
+
+void Window::remove_all_hot_key_global() {
+	lock_guard lock(hotkey_handlers_mutex);
+	// 直接清空
+    hotkey_handlers.clear();
+}
 
 
 #pragma region My Foundation Classes
@@ -521,8 +672,6 @@ HWND BaseSystemWindow::new_window() {
 
 #pragma endregion
 
-
-
-
-
-
+const char* version_string() {
+	return "w32oop::version_string 5.6.3.0 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
+}

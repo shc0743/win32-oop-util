@@ -39,7 +39,7 @@ namespace MyDemo {
             preventer = [this](EventData& data) {
                 data.preventDefault();
             };
-            myButton->onClick([&](Button* btn) {
+            myButton->onClick([&](EventData& data) {
                 if (flag) {
                     this->removeEventListener(WM_CLOSE, preventer);
                     this->removeEventListener(WM_QUERYENDSESSION, preventer);
@@ -52,7 +52,6 @@ namespace MyDemo {
                     myResult->text(L"Preventing close!");
                 }
                 flag = !flag;
-                return 0;
             });
             // create the static control
             myResult = new Static(*this, L"Closable!", 300, 30, 10, 50);

@@ -43,21 +43,21 @@ namespace MyDemo {
             // although looks ugly, we have to call the create
             myButton->create();
             // set event handler
-            myButton->onClick([this](Button* btn) {
+            myButton->onClick([this](EventData& event) {
                 MessageBoxW(hwnd, (
                     L"You typed:" + myTextBox->text()).c_str(), L"Notification", MB_OK);
-                return 0;
-                });
+            });
             // create the edit box
             myTextBox = new Edit(*this, L"Type here", 200, 30, 100, 10);
             myTextBox->create();
-            myTextBox->onChange([this](Edit* edit) {
+            myTextBox->onChange([this](EventData& event) {
                 // Get the text from the edit box
-                wstring text = edit->text();
+                wstring text = dynamic_cast<Edit&>(*event.source()).text();
+                // or directly:
+                // wstring text = event.source()->text(); // using polymorphism
                 // Set the text to the static control
                 myResult->text(text);
-                return 0;
-                });
+            });
             // create the static control
             myResult = new Static(*this, L"Result", 200, 30, 100, 50);
             myResult->create();
