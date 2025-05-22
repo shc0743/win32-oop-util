@@ -25,13 +25,13 @@ const wstring Window::get_class_name() const
 {
 	auto& type = typeid(*this);
 	return util::s2ws(
-		type.name() + ":"s +
+		type.name() + "#(C++ Window):"s +
 #ifdef _MSVC_LANG
 		type.raw_name()
 #else
 		"C++"
 #endif
-		+ "@Window"
+		+ "#Window"
 	);
 }
 
