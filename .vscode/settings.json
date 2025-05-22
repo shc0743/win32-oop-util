@@ -2,6 +2,10 @@
     "files.associations": {
         "xstring": "cpp",
         "unordered_map": "cpp",
-        "functional": "cpp"
+        "functional": "cpp",
+        "deque": "cpp",
+        "format": "cpp",
+        "list": "cpp",
+        "vector": "cpp"
     }
 }

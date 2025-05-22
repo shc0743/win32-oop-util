@@ -5,6 +5,9 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
+#ifndef __cplusplus
+#error "Must be included in C++"
+#endif
 #pragma region internal macros
 #include <string>
 #include <stdexcept>
@@ -20,6 +23,21 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 #define declare_exception(name) class name##_exception : public runtime_error { public: name##_exception(string d) : runtime_error(d) {} name##_exception() : runtime_error(( "Exception: " # name )) {} }
 #pragma endregion
 
+#ifdef _MSVC_LANG
+#if !(_MSVC_LANG > 201703L)
+#error "Window.hpp needs C++20 or later."
+#endif
+#elif defined __cplusplus
+#if !(__cplusplus > 201703L)
+#error "Window.hpp needs C++20 or later."
+#endif
+#else
+#error "No C++ supported"
+#endif
+
+
+namespace w32oop::util { std::wstring s2ws(const std::string str); }
+
 package w32oop declare;
 
 using package std;
@@ -30,28 +48,84 @@ declare_exception(window_not_initialized);
 declare_exception(window_already_initialized);
 declare_exception(window_class_registration_failure);
 declare_exception(window_creation_failure);
+declare_exception(window_has_no_parent);
 
-package util declare;
-wstring s2ws(const string str);
-endpackage;
+class Window;
+
+class EventData final {
+public:
+	EventData() {
+		hwnd = 0;
+		message = 0;
+        wParam = 0;
+        lParam = 0;
+		bubble = false;
+		isTrusted = false;
+		isPreventedDefault = false;
+		isStoppedPropagation = false;
+		isNotification = false;
+	};
+	~EventData() = default;
+public:
+	HWND hwnd;
+	UINT message; 
+	WPARAM wParam;
+	LPARAM lParam;
+	bool bubble;
+private:
+	bool isTrusted;
+public:
+	function<void(LRESULT)> returnValue;
+	function<void()> preventDefault;
+	function<void()> stopPropagation;
+private:
+	LRESULT result;
+	bool isPreventedDefault;
+    bool isStoppedPropagation;
+	bool isNotification;
+public:
+	bool is_notification() const {
+		return isNotification;
+	}
+public:
+	friend class Window;
+};
+
+
+constexpr UINT WINDOW_NOTIFICATION_CODES = WM_USER + 0x1011caf;
+constexpr UINT WM_MENU_CHECKED = WM_USER + WM_MENUCOMMAND + 0xFFFFFF;
+
 
 class Window {
 private:
-	static unordered_map<HWND, Window*> managed;
-	static std::mutex default_font_mutex;
+	static unordered_map<HWND, Window*> managed; // Internal -- DO NOT access it
+	static mutex default_font_mutex;
 	static HFONT default_font;
+	enum GlobalOptions {
+		Option_Unknown = 0,
+		Option_DebugMode,
+		Option_DisableDialogWindowHandling,
+		Option_DisableAcceleratorHandling,
+		Option_DisableHotkey,
+		Option_HACCEL,
+	};
+	static map<GlobalOptions, long long> global_options;
 protected:
 	HWND hwnd = nullptr; // 窗口句柄
+	
+public:
+	static inline void set_global_option(GlobalOptions option, long long value) {
+		global_options[option] = value;
+	}
+	static inline long long get_global_option(GlobalOptions option) {
+		if (global_options.contains(option)) {
+			return global_options[option];
+		}
+		return 0;
+	}
 
 public:
-#if defined(WINDOW_USE_GENERATED_CLASS) && WINDOW_USE_GENERATED_CLASS
-	virtual const wstring get_class_name() const {
-		auto& type = typeid(*this);
-		return util::s2ws(type.name());
-	}
-#else
-	virtual const wstring get_class_name() const = 0;
-#endif
+	virtual const wstring get_class_name() const;
 
 protected:
 	virtual const HICON get_window_icon() const {
@@ -70,63 +144,22 @@ protected:
 		set_default_font();
 		return default_font;
 	}
-	static void set_default_font(HFONT font) {
-		default_font_mutex.lock();
-		if (default_font) DeleteObject(default_font);
-		default_font = font;
-		default_font_mutex.unlock();
-	}
-	static void set_default_font(wstring font_name = L"Consolas") {
-		default_font_mutex.lock();
-		if (default_font) DeleteObject(default_font);
-		default_font = CreateFontW(-14, -7, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-			OUT_CHARACTER_PRECIS, CLIP_CHARACTER_PRECIS, DEFAULT_QUALITY, FF_DONTCARE,
-			font_name.c_str());
-		default_font_mutex.unlock();
-	}
+
+public:
+	static void set_default_font(HFONT font);
+	static void set_default_font(wstring font_name = L"Consolas");
 
 private:
 	wstring class_name;
-	void register_class_if_needed() {
-		if (!class_registered()) {
-			WNDCLASSEXW wcex{};
-			wcex.cbSize = sizeof(WNDCLASSEXW);
-
-			wcex.style = CS_HREDRAW | CS_VREDRAW;
-			wcex.lpfnWndProc = StaticWndProc;
-			wcex.cbClsExtra = 0;
-			wcex.cbWndExtra = 0;
-			wcex.hInstance = GetModuleHandleW(NULL);
-			wcex.hIcon = wcex.hIconSm = get_window_icon();
-			wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
-			wcex.hbrBackground  = (HBRUSH)(COLOR_WINDOW+1);
-			wcex.hbrBackground = CreateSolidBrush(get_window_background_color());
-			wcex.lpszMenuName = NULL;
-			wcex.lpszClassName = class_name.c_str();
-
-			if (!RegisterClassExW(&wcex)) {
-				throw window_class_registration_failure_exception();
-			}
-		}
-	}
+	virtual void register_class_if_needed() final;
 
 protected:
 	// 检查窗口句柄有效性
-	void validate_hwnd() const {
+	inline void validate_hwnd() const {
 		if (!hwnd) throw window_not_initialized_exception();
 	}
 
-	virtual HWND new_window() {
-		return CreateWindowExW(
-			setup_info->styleEx,
-			class_name.c_str(),
-			setup_info->title.c_str(),
-			setup_info->style,
-			setup_info->x, setup_info->y,
-			setup_info->width, setup_info->height,
-			nullptr, nullptr, GetModuleHandleW(NULL), this
-		);
-	}
+	virtual HWND new_window();
 
 	class setup_info_class {
 	public:
@@ -142,7 +175,6 @@ private:
 	bool is_main_window = false;
 
 public:
-	// 构造函数直接创建窗口（不自动显示）
 	Window(
 		const std::wstring& title,
 		int width,
@@ -151,376 +183,227 @@ public:
 		int y = 0,
 		LONG style = WS_OVERLAPPED,
 		LONG styleEx = WS_EX_CONTROLPARENT
-	) {
-		setup_info = new setup_info_class();
-		setup_info->title = title;
-		setup_info->width = width;
-		setup_info->height = height;
-		setup_info->x = x; setup_info->y = y;
-		setup_info->style = style;
-		setup_info->styleEx = styleEx;
+	);
+	virtual ~Window();
 
-		notification_router = new unordered_map<UINT, std::function<LRESULT(WPARAM, LPARAM)>>();
-	}
-
-	virtual void create() {
-		if (_created) throw window_already_initialized_exception();
-		class_name = get_class_name();
-		register_class_if_needed();
-		hwnd = new_window();
-		if (!hwnd) {
-			throw window_creation_failure_exception();
-		}
-		try {
-			setup_event_handlers();
-			_created = true;
-			delete setup_info;
-			setup_info = nullptr;
-			managed[hwnd] = this;
-			SendMessageW(hwnd, WM_SETFONT, (WPARAM)get_font(), 0);
-			onCreated();
-		}
-		catch (std::exception& exc) {
-			DestroyWindow(hwnd);
-			hwnd = nullptr;
-			throw exc;
-		}
-	}
-
-	// 不允许拷贝
 	Window(const Window&) = delete;
 	Window& operator=(const Window&) = delete;
 
-	// 允许移动
-	Window(Window&& other) noexcept : hwnd(other.hwnd), setup_info(other.setup_info), notification_router(other.notification_router) {
+	Window(Window&& other) noexcept :
+		hwnd(other.hwnd)
+		,setup_info(other.setup_info)
+		//,notification_router(other.notification_router)
+	{
 		other.hwnd = nullptr;
-		other.notification_router = nullptr;
+		//other.notification_router = nullptr;
 		if (hwnd) {
 			SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 			managed[hwnd] = this;
 		}
 	}
+	Window& operator=(Window&& other) noexcept;
 
-	Window& operator=(Window&& other) noexcept {
-		// 检查自赋值
-		if (this != &other) {
-			// 转移所有权
-			hwnd = other.hwnd;
-			_created = other._created;
-			setup_info = other.setup_info;
-			notification_router = other.notification_router;
-
-			// 重置源对象
-			other.hwnd = nullptr;
-			other._created = false;
-			other.setup_info = nullptr;
-			other.notification_router = nullptr;
-
-			// 更新窗口的用户数据指针
-			if (hwnd) {
-				SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-				managed[hwnd] = this;
-			}
-		}
-		return *this;
-	}
-
-	virtual ~Window() {
-		if (setup_info) {
-			delete setup_info;
-			setup_info = nullptr;
-		}
-		if (notification_router) {
-			delete notification_router;
-			notification_router = nullptr;
-		}
-		if (!hwnd) return;
-		if (managed.contains(hwnd)) {
-			managed.erase(hwnd);
-		}
-		destroy();
-	}
-
-	// 操作符重载，允许自动转换为HANDLE
-	operator HWND() const {
+	virtual operator HWND() const final {
 		return hwnd;
 	}
 
+public:
+	virtual void create() final;
+
 	// 添加子窗口（类似appendChild）
-	void append(const Window& child) {
+	virtual void append(const Window& child) {
 		validate_hwnd();
 		SetParent(child.hwnd, hwnd);
 	}
 
+	virtual Window& parent() final {
+        validate_hwnd();
+		HWND parent = GetParent(hwnd);
+		if (managed.contains(parent)) return *(managed.at(parent));
+		throw window_has_no_parent_exception();
+	}
+
 	// 窗口操作方法
-	void move(int x, int y) {
+	inline void move(int x, int y) {
 		validate_hwnd();
 		SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 	}
 
-	void resize(int w, int h) {
+	inline void resize(int w, int h) {
 		validate_hwnd();
 		SetWindowPos(hwnd, nullptr, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 	}
 
-	void center() {
-		HWND parent = GetParent(hwnd);
-		RECT rcParent{};
-		if (parent) GetWindowRect(parent, &rcParent);
+	virtual void center();
+	static void center(HWND, HWND parent = NULL);
 
-		// 取得窗口尺寸
-		RECT rect;
-		GetWindowRect(hwnd, &rect);
-		// 获得窗口大小
-		auto w = rect.right - rect.left, h = rect.bottom - rect.top;
-		// 重新设置rect里的值
-		if (parent) {
-			auto w2 = rcParent.right - rcParent.left, h2 = rcParent.bottom - rcParent.top;
-			rect.left = rcParent.left + w2 / 2 - w / 2;
-			rect.top = rcParent.top + h2 / 2 - h / 2;
-		} else {
-			rect.left = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
-			rect.top = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
-		}
-		// 移动窗口到指定的位置
-		SetWindowPos(hwnd, HWND_TOP, rect.left, rect.top, 1, 1, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER);
-	}
-
-	void set_topmost(bool isTopmost) {
+	inline void set_topmost(bool isTopmost) {
 		validate_hwnd();
 		SetWindowPos(hwnd, isTopmost ? HWND_TOPMOST : HWND_NOTOPMOST,
 			0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 	}
 
-	void enable(bool enabled = true) {
+	inline void enable(bool enabled = true) {
 		validate_hwnd();
 		EnableWindow(hwnd, enabled);
 	}
-	void disable() {
-		enable(false);
-	}
+	inline void disable() { enable(false); }
 
-	void close() {
-		validate_hwnd();
-		send(WM_CLOSE);
-	}
+	virtual void close();
 
-	void show(int nCmdShow = SW_SHOW) {
+	// 窗口显示系列函数
+	inline void show(int nCmdShow = SW_SHOW) {
 		validate_hwnd();
 		ShowWindow(hwnd, nCmdShow);
 		UpdateWindow(hwnd);
 	}
-
-	void hide() {
-		validate_hwnd();
-		ShowWindow(hwnd, SW_HIDE);
+	inline void hide() {
+		show(SW_HIDE);
+	}
+	inline void minimize() {
+		show(SW_MINIMIZE);
+	}
+	inline void maximize() {
+		show(SW_MAXIMIZE);
 	}
 
-	void destroy() {
-		validate_hwnd();
-		DestroyWindow(hwnd);
-		hwnd = nullptr;
-	}
+	virtual void set_main_window(bool isMainWindow = true) final;
 
-	void set_main_window(bool isMainWindow = true) {
-		validate_hwnd();
-		is_main_window = isMainWindow;
-	}
+	virtual HMENU sysmenu() const;
 
-	// 获取系统菜单
-	HMENU sysmenu() const {
-		validate_hwnd();
-		return GetSystemMenu(hwnd, FALSE);
-	}
+	virtual wstring text() const;
+	virtual void text(const std::wstring& text);
 
-	wstring text() const {
-		validate_hwnd();
-		LRESULT len = SendMessageW(hwnd, WM_GETTEXTLENGTH, 0, 0);
-		wchar_t* buffer = new wchar_t[len + 1];
-		SendMessageW(hwnd, WM_GETTEXT, len + 1, (LPARAM)buffer);
-		wstring text(buffer);
-		delete[] buffer;
-		return text;
-	}
+	virtual HFONT font() const;
+	virtual void font(HFONT font);
 
-	void text(const std::wstring& text) {
-		validate_hwnd();
-		SendMessageW(hwnd, WM_SETTEXT, 0, (LPARAM)text.c_str());
-	}
-
-	HFONT font() const {
-		return reinterpret_cast<HFONT>(SendMessage(hwnd, WM_GETFONT, 0, 0));
-	}
-
-	void font(HFONT font) {
-		validate_hwnd();
-		SendMessage(hwnd, WM_SETFONT, (WPARAM)font, TRUE);
-	}
-
-	void add_style(LONG_PTR style) {
-		validate_hwnd();
-		LONG_PTR currentStyle = GetWindowLongPtr(hwnd, GWL_STYLE);
-		SetWindowLongPtr(hwnd, GWL_STYLE, currentStyle | style);
-	}
-	void remove_style(LONG_PTR style) {
-		validate_hwnd();
-		LONG_PTR currentStyle = GetWindowLongPtr(hwnd, GWL_STYLE);
-		SetWindowLongPtr(hwnd, GWL_STYLE, currentStyle & ~style);
-	}
-	void add_style_ex(LONG_PTR styleEx) {
-		validate_hwnd();
-		LONG_PTR currentStyleEx = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-		SetWindowLongPtr(hwnd, GWL_EXSTYLE, currentStyleEx | styleEx);
-	}
-	void remove_style_ex(LONG_PTR styleEx) {
-		validate_hwnd();
-		LONG_PTR currentStyleEx = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-		SetWindowLongPtr(hwnd, GWL_EXSTYLE, currentStyleEx & ~styleEx);
-	}
+	virtual void add_style(LONG_PTR style) final;
+	virtual void remove_style(LONG_PTR style) final;
+	virtual void add_style_ex(LONG_PTR styleEx) final;
+	virtual void remove_style_ex(LONG_PTR styleEx) final;
 
 protected:
-	void rewrite_style(LONG_PTR style) {
+	virtual void destroy() {
 		validate_hwnd();
-		SetWindowLongPtr(hwnd, GWL_STYLE, style);
+		DestroyWindow(hwnd);
 	}
-	void rewrite_style_ex(LONG_PTR styleEx) {
-		validate_hwnd();
-		SetWindowLongPtr(hwnd, GWL_EXSTYLE, styleEx);
-	}
+
+	virtual void override_style(LONG_PTR style) final;
+	virtual void override_style_ex(LONG_PTR styleEx) final;
 
 public:
 	// 发送消息到窗口
-	LRESULT send(UINT msg, WPARAM wParam = 0, LPARAM lParam = 0) const {
-		validate_hwnd();
-		return SendMessage(hwnd, msg, wParam, lParam);
-	}
-
+	virtual LRESULT send(UINT msg, WPARAM wParam = 0, LPARAM lParam = 0) const;
+	virtual LRESULT dispatchEvent(EventData data) final;
+	// 简化的事件模型，只有冒泡（bubble）模式，不支持捕获（capture）模式
+private:
+	virtual LRESULT dispatchEvent(EventData& data, bool isTrusted, bool shouldBubble) final;
+	virtual void dispatchEventForWindow(EventData& data) final;
 public:
 	// 主消息循环
-	static int run() {
-		MSG msg;
-		while (GetMessage(&msg, nullptr, 0, 0)) {
-			HWND hRootWnd = GetAncestor(msg.hwnd, GA_ROOT);
-			if (!IsDialogMessage(hRootWnd, &msg)) {
-				TranslateMessage(&msg);
-				DispatchMessage(&msg);
-			}
-		}
-		return static_cast<int>(msg.wParam);
-	}
+	static int run();
 
 protected:
-	virtual void onCreated() {};
+	virtual void onCreated();
+	virtual void onDestroy();
 
 private:
 	// 静态消息处理函数
-	static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-		Window* pThis = nullptr;
-
-		if (msg == WM_CREATE) {
-			CREATESTRUCT* pCreate = reinterpret_cast<CREATESTRUCT*>(lParam);
-			pThis = reinterpret_cast<Window*>(pCreate->lpCreateParams);
-			SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pThis));
-			pThis->hwnd = hwnd;
-		}
-		else {
-			pThis = reinterpret_cast<Window*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
-		}
-
-		if (pThis) {
-			return pThis->WndProc(msg, wParam, lParam);
-		}
-		else {
-			return DefWindowProc(hwnd, msg, wParam, lParam);
-		}
-	}
-
+	static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	// 消息处理函数
-	LRESULT WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
-		if (!hwnd) return 0;
-		if (msg == WM_COMMAND) {
-			if (process_command(wParam, lParam) == 0) {
-				return 0;
-			}
-		}
-		if (msg == WM_DESTROY) {
-			hwnd = nullptr;  // 窗口被销毁时置空句柄
-			if (managed.contains(hwnd)) {
-				managed.erase(hwnd);
-			}
-			if (is_main_window) {
-				PostQuitMessage(0);  // 退出消息循环
-			}
-		}
-		if (router.contains(msg)) {
-			auto& handler = router.at(msg);
-			return handler(wParam, lParam);
-		}
-		if (msg == WM_NOTIFY) {
-			return process_notification(wParam, lParam);
-		}
-		return DefWindowProc(hwnd, msg, wParam, lParam);
-	}
+	LRESULT WndProc(UINT msg, WPARAM wParam, LPARAM lParam);
+	static LRESULT dispatchMessageToWindowAndGetResult(Window& window, UINT msg, WPARAM wParam, LPARAM lParam, bool isNotification = false);
 
-	unordered_map<UINT, std::function<LRESULT(WPARAM, LPARAM)>> router;
-	unordered_map<UINT, std::function<LRESULT(WPARAM, LPARAM)>>* notification_router;
+	using EventRouter = unordered_map<UINT,
+		std::vector<
+			std::function<void(EventData&)>
+		>
+	>;
+	EventRouter router;
+#if 0
+	EventRouter* notification_router;
+#endif
 
 protected:
 	// 注册事件处理器
+#if 0
 	template <typename Callable>
-	void add_event_handler(UINT msg, const Callable& handler) {
-		router.insert(std::make_pair(msg, (handler)));
+	void add_event_handler(UINT msg, const Callable &handler) {
+		if (!router.contains(msg)) {
+			// 如果消息不存在，创建一个新的消息处理函数列表
+			router.insert(std::make_pair(msg, std::vector<Callable>()));
+		}
+		router->at(msg).push_back((handler));
 	}
 	template <typename Callable>
 	void add_notification_handler(UINT msg, const Callable& handler) {
-		notification_router->insert(std::make_pair(msg, (handler)));
+		if (!notification_router->contains(msg)) {
+			// 如果消息不存在，创建一个新的消息处理函数列表
+			notification_router->insert(std::make_pair(msg, std::vector<Callable>()));	
+		}
+		notification_router->at(msg).push_back(handler);
 	}
+#else
+	void addEventListener(UINT msg, const function<void(EventData&)>& handler) {
+		if (!router.contains(msg)) {
+			// 如果消息不存在，创建一个新的消息处理函数列表
+			UINT msg2  = msg;
+			router.insert(std::make_pair<UINT, vector<function<void(EventData&)>>>(std::move(msg2), std::vector<function<void(EventData&)>>()));
+		}
+		router.at(msg).push_back((handler));
+	}
+	void removeEventListener(UINT msg) {
+		if (!router.contains(msg)) return;
+		// 清除指定的消息处理函数列表
+		router.erase(msg);
+	}
+	template <typename Callable>
+	void removeEventListener(UINT msg, const Callable& handler) {
+		if (!router.contains(msg)) return;
+		auto& handlers = router.at(msg);
+		// 查找匹配的 handler
+		auto it = std::find_if(handlers.begin(), handlers.end(),
+			[&handler](const auto& func) {
+				// 比较两个 std::function 是否指向相同的可调用对象
+				return func.target_type() == handler.target_type() &&
+					func.target<void(EventData&)>() == handler.target<void(EventData&)>();
+			});
+		if (it == handlers.end()) return; // 没找到
+		if (handlers.size() == 1) {
+			removeEventListener(msg); // 如果只有一个处理器，直接清空消息处理函数列表
+			return;
+		}
+		// 如果有多个处理器，移除指定的处理器
+		handlers.erase(it);
+	}
+#endif
 
 	virtual void setup_event_handlers() = 0;
 
 private:
-	LRESULT process_notification(WPARAM wParam, LPARAM lParam) {
-		NMHDR* pNMHDR = (NMHDR*)lParam;
-		if (!pNMHDR) return DefWindowProc(hwnd, WM_NOTIFY, wParam, lParam);
-
-		HWND hWndFrom = pNMHDR->hwndFrom;
-		if (managed.contains(hWndFrom)) {
-			Window* target = managed.at(hWndFrom);
-			auto target_router = target->notification_router;
-			if (target_router->contains(pNMHDR->code)) {
-				auto& handler = target_router->at(pNMHDR->code);
-				return handler(wParam, lParam);
-			}
-		}
-
-		return DefWindowProc(hwnd, WM_NOTIFY, wParam, lParam);
-	}
-	LRESULT process_command(WPARAM wParam, LPARAM lParam) {
-		HWND hWndFrom = (HWND)(ULONG_PTR)lParam;
-		if (managed.contains(hWndFrom)) {
-			Window* target = managed.at(hWndFrom);
-			auto target_router = target->notification_router;
-			if (target_router->contains(HIWORD(wParam))) {
-				auto& handler = target_router->at(HIWORD(wParam));
-				return handler(wParam, lParam);
-			}
-		}
-
-		return 1;
-	}
+#if 0
+	LRESULT process_notification(WPARAM wParam, LPARAM lParam);
+	LRESULT process_command(WPARAM wParam, LPARAM lParam);
+#else
+#endif
 };
 
 #pragma region macros to simplify the event handling
-#define WINDOW_EVENT_HANDLER_DECLARE_BEGIN() void setup_event_handlers() override {
+// DEPRECATED!! This macro makes code confusing and causes VCR001 Warning.
+// Please directly *override* the setup_event_handlers
+// virtual void setup_event_handlers() override
+#define WINDOW_EVENT_HANDLER_DECLARE_BEGIN() virtual void setup_event_handlers() override {
+// DEPRECATED!! This macro makes code confusing.
+// Please directly }
 #define WINDOW_EVENT_HANDLER_DECLARE_END() }
 
-// Not necessary to super
+// Not necessary to super IF you DIRECTLY inherits the Window
+// If your parent class DO SOMETHING in the setup_event_handlers, you will need to super
 #define WINDOW_EVENT_HANDLER_SUPER(base_class) base_class::setup_event_handlers();
 
-#define WINDOW_add_handler(msg,handler) add_event_handler(msg, [this](WPARAM wParam, LPARAM lParam) { return handler(wParam, lParam); });
-#define WINDOW_add_notification_handler(msg,handler) add_notification_handler(msg, [this](WPARAM wParam, LPARAM lParam) { return handler(wParam, lParam); });
-
-//#pragma warning(disable: VCR001) // 未找到"WINDOW_add_handler"的函数定义。
+#define WINDOW_add_handler(msg,handler) addEventListener(msg, [this](EventData& data) { if (data.hwnd != this->hwnd) return;handler(data); });
+//#define WINDOW_add_notification_handler(msg,handler) add_notification_handler(msg, [this](WPARAM wParam, LPARAM lParam) { return handler(wParam, lParam); });
+#define WINDOW_add_notification_handler(msg,handler) addEventListener((::w32oop::WINDOW_NOTIFICATION_CODES) + (msg), [this](EventData& data) { if (data.hwnd != this->hwnd || (!data.is_notification())) return;handler(data); });
 #pragma endregion
 
 
@@ -536,24 +419,11 @@ protected:
 	bool class_registered() const override {
 		return true;
 	}
-	HWND new_window() override {
-		auto cls = get_class_name();
-		return CreateWindowExW(
-			setup_info->styleEx,
-			cls.c_str(),
-			setup_info->title.c_str(),
-			setup_info->style,
-			setup_info->x, setup_info->y,
-			setup_info->width, setup_info->height,
-			parent, // 必须提供，否则会失败（逆天Windows控件库。。。）并且不可以变化，否则丢消息。。。
-			nullptr, nullptr, nullptr
-		);
-	}
+	HWND new_window() override;
 	// 注意，对已经注册的Win32控件类，无法使用RegisterClassExW
 	// 也就是说，我们的WndProc将不会被调用
 	// 因此只能使用WINDOW_add_notification_handler而不是WINDOW_add_handler
-	WINDOW_EVENT_HANDLER_DECLARE_BEGIN()
-	WINDOW_EVENT_HANDLER_DECLARE_END()
+	virtual void setup_event_handlers() override {}
 };
 
 package foundation declare;
@@ -569,9 +439,9 @@ protected:
 		return L"Static";
 	}
 private:
-	WINDOW_EVENT_HANDLER_DECLARE_BEGIN()
+	virtual void setup_event_handlers() override {
 		WINDOW_EVENT_HANDLER_SUPER(BaseSystemWindow);
-	WINDOW_EVENT_HANDLER_DECLARE_END()
+	}
 };
 
 class Edit : public BaseSystemWindow {
@@ -632,17 +502,16 @@ private:
 	bool is_readonly = false;
 private:
 	std::function<LRESULT(Edit*)> onChangeHandler;
-	LRESULT onEditChanged(WPARAM wParam, LPARAM lParam) {
+	void onEditChanged(EventData& data) {
 		if (onChangeHandler) {
-			return onChangeHandler(this);
+			data.returnValue(onChangeHandler(this));
 		}
-		return 0;
 	}
 
-	WINDOW_EVENT_HANDLER_DECLARE_BEGIN()
+	virtual void setup_event_handlers() override {
 		WINDOW_EVENT_HANDLER_SUPER(BaseSystemWindow);
 		WINDOW_add_notification_handler(EN_CHANGE, onEditChanged);
-	WINDOW_EVENT_HANDLER_DECLARE_END()
+	}
 };
 
 class Button : public BaseSystemWindow {
@@ -660,18 +529,17 @@ protected:
 	}
 private:
 	std::function<LRESULT(Button*)> onClickHandler;
-	LRESULT onBtnClicked(WPARAM wParam, LPARAM lParam) {
+	void onBtnClicked(EventData& data) {
 		if (onClickHandler) {
-			return onClickHandler(this);
+			data.returnValue(onClickHandler(this));
 		}
-		return 0;
 	}
 
 	// for Win32 controls, we use the notification instead of the event
-	WINDOW_EVENT_HANDLER_DECLARE_BEGIN()
+	virtual void setup_event_handlers() override {
 		WINDOW_EVENT_HANDLER_SUPER(BaseSystemWindow);
 		WINDOW_add_notification_handler(BN_CLICKED, onBtnClicked);
-	WINDOW_EVENT_HANDLER_DECLARE_END()
+	}
 };
 
 endpackage;

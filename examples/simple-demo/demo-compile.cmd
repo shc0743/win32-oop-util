@@ -8,4 +8,4 @@ if %errorlevel% neq 0 (
 )
 
 cd /d %~dp0
-cl /std:c++20 /EHsc /Zi /Fe:demo.exe  Window.cpp demo.cpp /link /MANIFEST:EMBED
+cl /std:c++20 /EHsc /Zi /Fe:demo.exe /D_UNICODE /DUNICODE  ../../Window.cpp demo.cpp /link /MANIFEST:EMBED
