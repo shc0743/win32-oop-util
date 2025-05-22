@@ -15,7 +15,7 @@ using namespace w32oop::foundation;
 
 namespace MyDemo {
 
-    class MyApp : public Window {
+    class AppThatPreventsClose : public Window {
     protected:
         //const wstring get_class_name() const override final {
         //	return L"myAppClass";
@@ -26,12 +26,12 @@ namespace MyDemo {
         Static* myResult;
 
     public:
-        MyApp(const wstring& title, int width, int height, int x = 0, int y = 0)
+        AppThatPreventsClose(const wstring& title, int width, int height, int x = 0, int y = 0)
             : Window(title, width, height, x, y, WS_OVERLAPPEDWINDOW)
         {
             // Do not initialize the button here
         }
-        ~MyApp() override {
+        ~AppThatPreventsClose() override {
             if (myButton) delete myButton;
             if (myTextBox) delete myTextBox;
             if (myResult) delete myResult;
@@ -73,7 +73,7 @@ namespace MyDemo {
 
     int main2() {
         // create the application
-        MyApp app(L"My Application", 640, 480);
+        AppThatPreventsClose app(L"My Application", 640, 480);
         // create it
         app.create();
         // set the main window

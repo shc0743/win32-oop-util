@@ -19,8 +19,7 @@ wstring w32oop::util::s2ws(const string str) {
 unordered_map<HWND, Window*> Window::managed;
 map<Window::GlobalOptions, long long> Window::global_options;
 HFONT Window::default_font;
-std::mutex Window::default_font_mutex;
-
+std::recursive_mutex Window::default_font_mutex;
 
 const wstring Window::get_class_name() const
 {
@@ -277,22 +276,33 @@ LRESULT Window::dispatchEvent(EventData& data, bool isTrusted, bool shouldBubble
 }
 
 void Window::dispatchEventForWindow(EventData& data) {
-	if (!router.contains(data.message)) return;
-	auto& handlers = router.at(data.message);
-	for (auto& handler : handlers) {
-		try {
-			handler(data);
-			if (data.isStoppedPropagation) break;
-		}
-		catch (std::exception& e) {
-			if (get_global_option(Option_DebugMode)) {
-				string what = "[ERROR] Unexpected exception in event handler: ";
-				what += e.what();
-				fwrite(what.c_str(), sizeof(decltype(what)::value_type), what.size(), stderr);
-				DebugBreak();
+	router_lock.lock();
+	if (!router.contains(data.message)) {
+		router_lock.unlock();
+		return;
+	}
+	try {
+		auto& handlers = router.at(data.message);
+		for (auto& handler : handlers) {
+			try {
+				handler(data);
+				if (data.isStoppedPropagation) break;
 			}
-			throw e;
+			catch (std::exception& e) {
+				if (get_global_option(Option_DebugMode)) {
+					string what = "[ERROR] Unexpected exception in event handler: ";
+					what += e.what();
+					fwrite(what.c_str(), sizeof(decltype(what)::value_type), what.size(), stderr);
+					DebugBreak();
+				}
+				throw e;
+			}
 		}
+		router_lock.unlock();
+	}
+	catch (...) {
+		router_lock.unlock();
+		throw;
 	}
 }
 

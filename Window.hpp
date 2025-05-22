@@ -99,7 +99,7 @@ constexpr UINT WM_MENU_CHECKED = WM_USER + WM_MENUCOMMAND + 0xFFFFFF;
 class Window {
 private:
 	static unordered_map<HWND, Window*> managed; // Internal -- DO NOT access it
-	static mutex default_font_mutex;
+	static recursive_mutex default_font_mutex;
 	static HFONT default_font;
 	enum GlobalOptions {
 		Option_Unknown = 0,
@@ -320,6 +320,7 @@ private:
 		>
 	>;
 	EventRouter router;
+	recursive_mutex router_lock;
 #if 0
 	EventRouter* notification_router;
 #endif
@@ -345,36 +346,58 @@ protected:
 	}
 #else
 	void addEventListener(UINT msg, const function<void(EventData&)>& handler) {
-		if (!router.contains(msg)) {
-			// 如果消息不存在，创建一个新的消息处理函数列表
-			UINT msg2  = msg;
-			router.insert(std::make_pair<UINT, vector<function<void(EventData&)>>>(std::move(msg2), std::vector<function<void(EventData&)>>()));
+		router_lock.lock();
+		try {
+			if (!router.contains(msg)) {
+				// 如果消息不存在，创建一个新的消息处理函数列表
+				UINT msg2  = msg;
+				router.insert(std::make_pair<UINT, vector<function<void(EventData&)>>>(std::move(msg2), std::vector<function<void(EventData&)>>()));
+			}
+			router.at(msg).push_back((handler));
+			router_lock.unlock();
 		}
-		router.at(msg).push_back((handler));
+		catch (...) {
+			router_lock.unlock();
+			throw;
+		}
 	}
 	void removeEventListener(UINT msg) {
+		router_lock.lock();
 		if (!router.contains(msg)) return;
 		// 清除指定的消息处理函数列表
 		router.erase(msg);
+		router_lock.unlock();
 	}
 	template <typename Callable>
 	void removeEventListener(UINT msg, const Callable& handler) {
-		if (!router.contains(msg)) return;
-		auto& handlers = router.at(msg);
-		// 查找匹配的 handler
-		auto it = std::find_if(handlers.begin(), handlers.end(),
-			[&handler](const auto& func) {
-				// 比较两个 std::function 是否指向相同的可调用对象
-				return func.target_type() == handler.target_type() &&
-					func.target<void(EventData&)>() == handler.target<void(EventData&)>();
-			});
-		if (it == handlers.end()) return; // 没找到
-		if (handlers.size() == 1) {
-			removeEventListener(msg); // 如果只有一个处理器，直接清空消息处理函数列表
+		router_lock.lock();
+		if (!router.contains(msg)) {
+			router_lock.unlock();
 			return;
 		}
-		// 如果有多个处理器，移除指定的处理器
-		handlers.erase(it);
+		try {
+			auto& handlers = router.at(msg);
+			// 查找匹配的 handler
+			auto it = std::find_if(handlers.begin(), handlers.end(),
+				[&handler](const auto& func) {
+					// 比较两个 std::function 是否指向相同的可调用对象
+					return func.target_type() == handler.target_type() &&
+						func.target<void(EventData&)>() == handler.target<void(EventData&)>();
+				});
+			if (it == handlers.end()) return; // 没找到
+			if (handlers.size() == 1) {
+				router_lock.unlock();
+				removeEventListener(msg); // 如果只有一个处理器，直接清空消息处理函数列表
+				return;
+			}
+			// 如果有多个处理器，移除指定的处理器
+			handlers.erase(it);
+			router_lock.unlock();
+		}
+		catch (...) {
+			router_lock.unlock();
+			throw;
+		}
 	}
 #endif
 
