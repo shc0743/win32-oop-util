@@ -47,6 +47,7 @@ namespace MyDemo {
         Edit *lblFilePath;
         Edit *txtEditor;
         std::wstring currentFilePath; // 当前文件路径
+        HFONT editorFont = NULL;
 
         bool unsaved = false;
 
@@ -60,6 +61,7 @@ namespace MyDemo {
             if (btnSaveAs) delete btnSaveAs;
             if (lblFilePath) delete lblFilePath;
             if (txtEditor) delete txtEditor;
+            if (editorFont) DeleteFont(editorFont);
         }
 
     protected:
@@ -84,6 +86,11 @@ namespace MyDemo {
             lblFilePath->create();
             lblFilePath->readonly(true);
 
+            // 创建字体
+            editorFont = CreateFontW(-18, -9, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                OUT_CHARACTER_PRECIS, CLIP_CHARACTER_PRECIS, CLEARTYPE_QUALITY, FF_DONTCARE,
+                L"NSimsun");
+
             // 创建多行编辑框
             txtEditor = new Edit(*this, L"", 620, 400, 10, 50, 
                 WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL | ES_AUTOVSCROLL | ES_MULTILINE | ES_WANTRETURN | WS_HSCROLL | WS_VSCROLL);
@@ -94,6 +101,7 @@ namespace MyDemo {
                 }
                 unsaved = true; 
             });
+            txtEditor->font(editorFont);
 
             register_hot_key(true, false, false, 'O', [this](HotKeyProcData& event){
                 event.preventDefault();

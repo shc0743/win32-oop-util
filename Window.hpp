@@ -42,7 +42,7 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50604010; // 5.6.4.1
+constexpr long version = 50604020; // 5.6.4.2
 const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
@@ -277,6 +277,11 @@ public:
 	}
 
 	// 窗口操作方法
+	virtual void update() {
+		validate_hwnd();
+		UpdateWindow(hwnd);
+	}
+
 	inline void move(int x, int y) {
 		validate_hwnd();
 		SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
