@@ -42,7 +42,7 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50604000; // 5.6.4.0
+constexpr long version = 50604010; // 5.6.4.1
 const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
@@ -285,6 +285,11 @@ public:
 	inline void resize(int w, int h) {
 		validate_hwnd();
 		SetWindowPos(hwnd, nullptr, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+	}
+
+	inline void resize(int x, int y, int w, int h) {
+		validate_hwnd();
+		SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
 	}
 
 	virtual void center();
@@ -537,8 +542,8 @@ package foundation declare;
 
 class Static : public BaseSystemWindow {
 public:
-	Static(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0)
-		: BaseSystemWindow(parent, text, width, height, x, y, WS_CHILD | WS_VISIBLE) {
+	Static(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, LONG style = WS_CHILD | WS_VISIBLE)
+		: BaseSystemWindow(parent, text, width, height, x, y, style) {
 	}
 	~Static() override {}
 protected:
@@ -553,8 +558,8 @@ private:
 
 class Edit : public BaseSystemWindow {
 public:
-	Edit(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0)
-		: BaseSystemWindow(parent, text, width, height, x, y, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL) {
+	Edit(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, LONG style = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL)
+		: BaseSystemWindow(parent, text, width, height, x, y, style) {
 	}
 	~Edit() override {}
 	void onChange(CEventHandler handler) {
@@ -596,7 +601,7 @@ public:
 		validate_hwnd();
 		return is_readonly;
 	}
-	void readonly(bool readonly = true) {
+	void readonly(bool readonly) {
 		validate_hwnd();
 		Edit_SetReadOnly(hwnd, readonly);
 		is_readonly = readonly;
@@ -624,8 +629,8 @@ private:
 
 class Button : public BaseSystemWindow {
 public:
-	Button(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0)
-		: BaseSystemWindow(parent, text, width, height, x, y, WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP) {
+	Button(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, LONG style = WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP)
+		: BaseSystemWindow(parent, text, width, height, x, y, style) {
 	}
 	~Button() override {}
 	void onClick(CEventHandler handler) {
