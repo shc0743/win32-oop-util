@@ -12,6 +12,7 @@
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "shell32.lib")
 #pragma comment(linker,"\"/manifestdependency:type='win32' \
 name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
 processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
@@ -131,6 +132,8 @@ namespace MyDemo {
                 if (released_key) return;
                 thread([this](){ saveFile(true); }).detach();
             }); // Ctrl+Shift+S
+
+            add_style_ex(WS_EX_ACCEPTFILES); // 允许接受文件
         }
 
     public:
@@ -151,6 +154,7 @@ namespace MyDemo {
                 MessageBoxW(hwnd, (L"对不起！我读不出来这个文件！原因是：" + to_wstring(GetLastError())).c_str(), L"Sorry!", MB_ICONERROR);
             }
             CloseHandle(hFile);
+            delete[] buffer;
         }
         // 打开文件
         void openFile() {
@@ -278,6 +282,21 @@ namespace MyDemo {
             if (!unsaved) return;
             e.returnValue(0);
         }
+        void onDrop(EventData &e) {
+            e.preventDefault();
+
+            HDROP hDrop = (HDROP)e.wParam;
+            UINT nFiles = DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0);
+            if (nFiles < 1) return;
+
+            if (nFiles > 1) {
+                MessageBoxW(hwnd, L"对不起！我一次只能打开一个文件！", L"Sorry!", MB_ICONERROR);
+                return; 
+            }
+            auto filePath = std::make_unique<wchar_t[]>(32768);
+            DragQueryFileW(hDrop, 0, filePath.get(), 32768); // 支持长路径
+            loadFile(filePath.get());
+        }
 
         virtual void setup_event_handlers() override {
             WINDOW_add_handler(WM_SIZING, onSizeChange);
@@ -285,6 +304,7 @@ namespace MyDemo {
             WINDOW_add_handler(WM_CLOSE, onWillClose);
             WINDOW_add_handler(WM_QUERYENDSESSION, onWillShutdown);
             WINDOW_add_handler(WM_ENDSESSION, onWillShutdown);
+            WINDOW_add_handler(WM_DROPFILES, onDrop);
         }
     };
 
@@ -302,7 +322,7 @@ int wmain(int argc, wchar_t* argv[]) {
     // show it
     app.show();
     thread([&]() {
-        Sleep(1000); // 简单的demo，忽略一些细节，假设1000ms足够
+        Sleep(500); // 简单的demo，忽略一些细节，假设500ms足够
         if (argc < 2) return;
         app.loadFile(argv[1]);
     }).detach();
