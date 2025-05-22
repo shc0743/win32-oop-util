@@ -33,6 +33,8 @@ namespace MyDemo {
         }
         ~MyApp() override {
             if (myButton) delete myButton;
+            if (myTextBox) delete myTextBox;
+            if (myResult) delete myResult;
         }
     protected:
         void onCreated() override {
