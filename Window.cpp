@@ -160,6 +160,41 @@ void Window::create() {
 	}
 }
 
+bool Window::force_focus(DWORD timeout) {
+	const auto focus = [this]() {this->focus(); return false; };
+	HWND fg = GetForegroundWindow();
+	if (!fg) return focus(); // fallback to normal focus
+	DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+	if (!pid || pid == GetCurrentProcessId()) return focus();
+	// 通过线程注入，强行获取焦点
+	HMODULE user32 = GetModuleHandleW(L"user32.dll");
+	if (!user32) return focus();
+	LPTHREAD_START_ROUTINE SetForegroundWindow = (LPTHREAD_START_ROUTINE)GetProcAddress(user32, "SetForegroundWindow");
+	if (!SetForegroundWindow) return focus();
+	HANDLE hProcess = OpenProcess(
+		// https://learn.microsoft.com/zh-cn/windows/win32/api/processthreadsapi/nf-processthreadsapi-createremotethread
+		PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
+		PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
+		FALSE, pid
+	);
+    if (!hProcess) return focus();
+	HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, SetForegroundWindow, (LPVOID)hwnd, CREATE_SUSPENDED, NULL);
+	CloseHandle(hProcess);
+    if (!hThread) return focus();
+	ResumeThread(hThread);
+	if (timeout) {
+        WaitForSingleObject(hThread, timeout);
+		DWORD exitCode = 0;
+        GetExitCodeThread(hThread, &exitCode);
+		CloseHandle(hThread);
+		if (exitCode == STILL_ACTIVE) return focus();
+		return (exitCode != 0);
+	}
+    CloseHandle(hThread);
+	return true; // 如果不等待结果，直接视为成功
+}
+
 void Window::center() {
 	center(hwnd, GetParent(hwnd));
 }
@@ -686,5 +721,5 @@ HWND BaseSystemWindow::new_window() {
 #pragma endregion
 
 const char* version_string() {
-	return "w32oop::version_string 5.6.4.4 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
+	return "w32oop::version_string 5.6.4.5 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
 }

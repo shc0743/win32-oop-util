@@ -42,7 +42,7 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50604040; // 5.6.4.4
+constexpr long version = 50604050;
 const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
@@ -282,6 +282,19 @@ public:
 		validate_hwnd();
 		UpdateWindow(hwnd);
 	}
+
+	inline void focus() {
+		validate_hwnd();
+		SetForegroundWindow(hwnd);
+        SetFocus(hwnd);
+	}
+
+	inline void blur() {
+		validate_hwnd();
+		SetFocus(GetDesktopWindow());
+	}
+
+	virtual bool force_focus(DWORD timeout = 10000) final;
 
 	inline void move(int x, int y) {
 		validate_hwnd();
