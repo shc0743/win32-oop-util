@@ -42,7 +42,7 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50604030; // 5.6.4.3
+constexpr long version = 50604040; // 5.6.4.4
 const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
@@ -516,10 +516,11 @@ protected:
 
 class BaseSystemWindow : public Window {
 public:
-	BaseSystemWindow(HWND parent, const std::wstring& title, int width, int height, int x = 0, int y = 0, LONG style = WS_OVERLAPPED, LONG styleEx = 0)
-		: Window(title, width, height, x, y, style, styleEx), parent(parent) {
+	BaseSystemWindow(HWND parent, const std::wstring& title, int width, int height, int x = 0, int y = 0, LONG style = WS_OVERLAPPED, LONG styleEx = 0, int ctlid = 0)
+		: Window(title, width, height, x, y, style, styleEx), parent(parent), ctlid(ctlid) {
 	}
 protected:
+	int ctlid;
 	HWND parent;
 	bool class_registered() const override {
 		return true;
@@ -636,8 +637,8 @@ private:
 
 class Button : public BaseSystemWindow {
 public:
-	Button(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, LONG style = WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP)
-		: BaseSystemWindow(parent, text, width, height, x, y, style) {
+	Button(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, int ctlid = 0, LONG style = WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP)
+		: BaseSystemWindow(parent, text, width, height, x, y, style, ctlid) {
 	}
 	~Button() override {}
 	void onClick(CEventHandler handler) {

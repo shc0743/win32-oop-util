@@ -679,12 +679,12 @@ HWND BaseSystemWindow::new_window() {
 		setup_info->x, setup_info->y,
 		setup_info->width, setup_info->height,
 		parent, // 必须提供，否则会失败（逆天Windows控件库。。。）并且不可以变化，否则丢消息。。。
-		nullptr, nullptr, nullptr
+		(HMENU)(LONG_PTR)(ctlid), nullptr, nullptr
 	);
 }
 
 #pragma endregion
 
 const char* version_string() {
-	return "w32oop::version_string 5.6.4.3 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
+	return "w32oop::version_string 5.6.4.4 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
 }
