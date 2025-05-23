@@ -42,7 +42,7 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50604020; // 5.6.4.2
+constexpr long version = 50604030; // 5.6.4.3
 const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
@@ -272,6 +272,7 @@ public:
 	virtual Window& parent() final {
 		validate_hwnd();
 		HWND parent = GetParent(hwnd);
+		if (!parent) throw window_has_no_parent_exception();
 		if (managed.contains(parent)) return *(managed.at(parent));
 		throw window_has_no_parent_exception();
 	}
@@ -357,6 +358,7 @@ protected:
 public:
 	// 发送消息到窗口
 	virtual LRESULT send(UINT msg, WPARAM wParam = 0, LPARAM lParam = 0) const;
+	virtual BOOL post(UINT msg, WPARAM wParam = 0, LPARAM lParam = 0) const;
 	// 简化的事件模型，暂时只有冒泡（bubble）模式，不支持捕获（capture）模式
 	virtual LRESULT dispatchEvent(EventData data) final;
 private:

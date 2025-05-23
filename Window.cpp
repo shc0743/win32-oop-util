@@ -264,6 +264,11 @@ LRESULT Window::send(UINT msg, WPARAM wParam, LPARAM lParam) const {
 	return SendMessage(hwnd, msg, wParam, lParam);
 }
 
+BOOL Window::post(UINT msg, WPARAM wParam, LPARAM lParam) const {
+	validate_hwnd();
+	return PostMessage(hwnd, msg, wParam, lParam);
+}
+
 LRESULT Window::dispatchEvent(EventData data) {
 	return dispatchEvent(data, false, true);
 }
@@ -558,6 +563,8 @@ LRESULT Window::dispatchMessageToWindowAndGetResult(UINT msg, WPARAM wParam, LPA
 	// 设置处理程序
 	data.returnValue = [&](LRESULT value) {
 		data.result = value;
+		// 自动 preventDefault
+		data.preventDefault();
 	};
 	data.stopPropagation = [&]() {
 		data.isStoppedPropagation = true;
@@ -679,5 +686,5 @@ HWND BaseSystemWindow::new_window() {
 #pragma endregion
 
 const char* version_string() {
-	return "w32oop::version_string 5.6.4.2 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
+	return "w32oop::version_string 5.6.4.3 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
 }
