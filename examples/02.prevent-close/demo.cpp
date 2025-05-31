@@ -17,45 +17,41 @@ using namespace w32oop::foundation;
 namespace MyDemo {
     class AppThatPreventsClose : public Window {
     protected:
-        Button* myButton;
-        Static* myResult;
+        Button myButton;
+        Static myResult;
 
     public:
         AppThatPreventsClose(const wstring& title, int width, int height, int x = 0, int y = 0)
             : Window(title, width, height, x, y, WS_OVERLAPPEDWINDOW)
         {
         }
-        ~AppThatPreventsClose() override {
-            if (myButton) delete myButton;
-            if (myResult) delete myResult;
-        }
     protected:
         std::function<void(EventData &)> preventer;
         bool flag = false;
         void onCreated() override {
-            myButton = new Button(*this, L"Toggle exit allowance", 150, 30, 10, 10);
-            myButton->create();
+            myButton.set_parent(*this);
+            myButton.create(L"Toggle exit allowance", 150, 30, 10, 10);
             // set event handler
             preventer = [this](EventData& data) {
                 data.preventDefault();
             };
-            myButton->onClick([&](EventData& data) {
+            myButton.onClick([&](EventData& data) {
                 if (flag) {
                     this->removeEventListener(WM_CLOSE, preventer);
                     this->removeEventListener(WM_QUERYENDSESSION, preventer);
                     this->removeEventListener(WM_ENDSESSION, preventer);
-                    myResult->text(L"Closable now!");
+                    myResult.text(L"Closable now!");
                 } else {
                     this->addEventListener(WM_CLOSE, preventer);
                     this->addEventListener(WM_QUERYENDSESSION, preventer);
                     this->addEventListener(WM_ENDSESSION, preventer);
-                    myResult->text(L"Preventing close!");
+                    myResult.text(L"Preventing close!");
                 }
                 flag = !flag;
             });
             // create the static control
-            myResult = new Static(*this, L"Closable!", 300, 30, 10, 50);
-            myResult->create();
+            myResult.set_parent(*this);
+            myResult.create(L"Closable!", 300, 30, 10, 50);
         }
     private:
         void onPaint(EventData& data) {

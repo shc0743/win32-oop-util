@@ -193,10 +193,11 @@ protected:
 public:
 	static void set_default_font(HFONT font);
 	static void set_default_font(wstring font_name = L"Consolas");
+	static void set_accelerator(HACCEL accelerator);
 
 private:
 	wstring class_name;
-	virtual void register_class_if_needed() final;
+	virtual void register_class_if_needed();
 	DWORD _owner = 0;
 
 protected:
@@ -209,10 +210,10 @@ protected:
 
 	class setup_info_class {
 	public:
-		setup_info_class() : title(L""), width(0), height(0), x(0), y(0), style(WS_OVERLAPPED), styleEx(0) {}
 		wstring title;
-		int width, height, x, y;
-		LONG style, styleEx;
+		int width = 0, height = 0, x = 0, y = 0;
+		LONG style = WS_OVERLAPPED, styleEx = 0; 
+		HMENU hMenu = 0;
 	} *setup_info;
 
 	virtual void transfer_ownership() final {
@@ -231,8 +232,10 @@ public:
 		int x = 0,
 		int y = 0,
 		LONG style = WS_OVERLAPPED,
-		LONG styleEx = WS_EX_CONTROLPARENT
+		LONG styleEx = WS_EX_CONTROLPARENT,
+		HMENU hMenu = nullptr
 	);
+	Window();
 	virtual ~Window();
 
 	Window(const Window&) = delete;
@@ -261,7 +264,21 @@ public:
 	}
 
 public:
+	long long user = 0; // 用户数据
+
+public:
 	virtual void create() final;
+	virtual void create(
+		const std::wstring& title,
+		int width,
+		int height,
+		int x = 0,
+		int y = 0,
+		LONG style = WS_OVERLAPPED,
+		LONG styleEx = WS_EX_CONTROLPARENT,
+		HMENU hMenu = nullptr
+	) final;
+	virtual bool created() final;
 
 	// 添加子窗口（类似appendChild）
 	virtual void append(const Window& child) {
@@ -283,10 +300,11 @@ public:
 		UpdateWindow(hwnd);
 	}
 
-	inline void focus() {
+	inline bool focus() {
 		validate_hwnd();
-		SetForegroundWindow(hwnd);
+		bool success = SetForegroundWindow(hwnd);
         SetFocus(hwnd);
+		return success;
 	}
 
 	inline void blur() {
@@ -529,11 +547,16 @@ protected:
 
 class BaseSystemWindow : public Window {
 public:
-	BaseSystemWindow(HWND parent, const std::wstring& title, int width, int height, int x = 0, int y = 0, LONG style = WS_OVERLAPPED, LONG styleEx = 0, int ctlid = 0)
-		: Window(title, width, height, x, y, style, styleEx), parent(parent), ctlid(ctlid) {
+	BaseSystemWindow(HWND parent, const std::wstring& title, int width, int height, int x = 0, int y = 0, LONG style = WS_OVERLAPPED, LONG styleEx = 0, unsigned long long ctlid_p = 0)
+		: ctlid(ctlid_p != 0 ? ctlid_p : ++ctlid_generator), Window(title, width, height, x, y, style, styleEx, HMENU(ctlid_p != 0 ? ctlid_p : static_cast<decltype(ctlid_p)>(ctlid_generator))), parent(parent)
+	{
+	}
+	virtual void set_parent(HWND parent) {
+		this->parent = parent;
 	}
 protected:
-	int ctlid;
+	static std::atomic<unsigned long long> ctlid_generator;
+	unsigned long long ctlid;
 	HWND parent;
 	bool class_registered() const override {
 		return true;
@@ -566,6 +589,7 @@ public:
 	Static(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, LONG style = WS_CHILD | WS_VISIBLE)
 		: BaseSystemWindow(parent, text, width, height, x, y, style) {
 	}
+	Static() : BaseSystemWindow(0, L"", 0, 0, 1, 1, WS_CHILD | WS_VISIBLE) {}
 	~Static() override {}
 protected:
 	const wstring get_class_name() const override {
@@ -582,6 +606,7 @@ public:
 	Edit(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, LONG style = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL)
 		: BaseSystemWindow(parent, text, width, height, x, y, style) {
 	}
+	Edit() : BaseSystemWindow(0, L"", 0, 0, 1, 1, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL) {}
 	~Edit() override {}
 	void onChange(CEventHandler handler) {
 		onChangeHandler = handler;
@@ -653,6 +678,7 @@ public:
 	Button(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, int ctlid = 0, LONG style = WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP)
 		: BaseSystemWindow(parent, text, width, height, x, y, style, ctlid) {
 	}
+	Button() : BaseSystemWindow(0, L"", 0, 0, 1, 1, WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP) {}
 	~Button() override {}
 	void onClick(CEventHandler handler) {
 		onClickHandler = handler;

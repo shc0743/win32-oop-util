@@ -17,7 +17,7 @@ namespace MyDemo {
 
     class HotKeySystemwideAppDemo : public Window {
     protected:
-        Static *text;
+        Static text;
 
     public:
         HotKeySystemwideAppDemo(const wstring& title, int width, int height, int x = 0, int y = 0)
@@ -25,21 +25,18 @@ namespace MyDemo {
         {
             // Do not initialize the button here
         }
-        ~HotKeySystemwideAppDemo() override {
-            if (text) delete text;
-        }
     protected:
         void onCreated() override {
-            text = new Static(hwnd, L"Result will show here...", 400, 30);
-            text->create();
+            text.set_parent(*this);
+            text.create(L"Result will show here...", 400, 30);
             register_hot_key(true, true, false, 'U', [&](HotKeyProcData &data) {
                 data.preventDefault();
                 if (!data.pKbdStruct) return;
                 // Do not block the hook proc thread! (Especially when the Hook is globally hooked)
                 std::thread([&] {
-                    text->text(L"Ctrl+Alt+U is pressed!");
+                    text.text(L"Ctrl+Alt+U is pressed!");
                     Sleep(1000);
-                    text->text(L"Result will show here...");
+                    text.text(L"Result will show here...");
                 }).detach();
             }, Window::HotKeyOptions::System);
         }

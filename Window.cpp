@@ -24,6 +24,7 @@ map<Window::HotKeyOptions, function<void(Window::HotKeyProcData&)>> Window::hotk
 std::recursive_mutex Window::hotkey_handlers_mutex;
 HHOOK Window::_hHook;
 DWORD Window::message_loop_thread_id;
+std::atomic<unsigned long long> BaseSystemWindow::ctlid_generator;
 
 
 const wstring Window::get_class_name() const
@@ -56,6 +57,10 @@ void Window::set_default_font(wstring font_name) {
 	default_font_mutex.unlock();
 }
 
+void Window::set_accelerator(HACCEL accelerator) {
+	set_global_option(GlobalOptions::Option_HACCEL, (long long)(void *)accelerator);
+}
+
 void Window::register_class_if_needed() {
 	if (!class_registered()) {
 		WNDCLASSEXW wcex{};
@@ -68,7 +73,7 @@ void Window::register_class_if_needed() {
 		wcex.hInstance = GetModuleHandleW(NULL);
 		wcex.hIcon = wcex.hIconSm = get_window_icon();
 		wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
-		wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+		//wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
 		wcex.hbrBackground = CreateSolidBrush(get_window_background_color());
 		wcex.lpszMenuName = NULL;
 		wcex.lpszClassName = class_name.c_str();
@@ -87,11 +92,11 @@ HWND Window::new_window() {
 		setup_info->style,
 		setup_info->x, setup_info->y,
 		setup_info->width, setup_info->height,
-		nullptr, nullptr, GetModuleHandleW(NULL), this
+		NULL, setup_info->hMenu, GetModuleHandleW(NULL), this
 	);
 }
 
-Window::Window(const std::wstring& title, int width, int height, int x, int y, LONG style, LONG styleEx) {
+Window::Window(const std::wstring& title, int width, int height, int x, int y, LONG style, LONG styleEx, HMENU hMenu) {
 	setup_info = new setup_info_class();
 	setup_info->title = title;
 	setup_info->width = width;
@@ -99,8 +104,11 @@ Window::Window(const std::wstring& title, int width, int height, int x, int y, L
 	setup_info->x = x; setup_info->y = y;
 	setup_info->style = style;
 	setup_info->styleEx = styleEx;
+	setup_info->hMenu = hMenu;
+}
 
-	//notification_router = new unordered_map<UINT, std::function<LRESULT(WPARAM, LPARAM)>>();
+Window::Window() {
+	setup_info = nullptr;
 }
 
 Window& Window::operator=(Window&& other) noexcept {
@@ -133,13 +141,17 @@ void Window::create() {
 	try {
 		setup_event_handlers();
 	}
-	catch (std::exception& exc) {
-		throw exc;
+	catch (std::exception&) {
+		throw;
 	}
 	class_name = get_class_name();
 	register_class_if_needed();
 	hwnd = new_window();
 	if (!hwnd) {
+		if (get_global_option(Option_DebugMode)) {
+			fprintf(stderr, "[w32oop::Window]: Cannot create window!! %d [where] CLASS_NAME = ", GetLastError());
+			fwprintf(stderr, L"%ls\n", class_name.c_str());
+		}
 		throw window_creation_failure_exception();
 	}
 	try {
@@ -156,12 +168,31 @@ void Window::create() {
 		if (get_global_option(Option_DebugMode)) {
 			fprintf(stderr, "Cannot create window!! %s\n", exc.what());
 		}
-		throw exc;
+		throw;
 	}
 }
 
+void Window::create(
+	const std::wstring &title, int width, int height, int x, int y,
+	LONG style, LONG styleEx, HMENU hMenu
+) {
+	if (_created) throw window_already_initialized_exception();
+	if (!setup_info) setup_info = new setup_info_class();
+	setup_info->title = title;
+	setup_info->width = width;
+	setup_info->height = height;
+	setup_info->x = x; setup_info->y = y;
+	if (!setup_info->style) setup_info->style = style;
+	if (!setup_info->styleEx || setup_info->styleEx == WS_EX_CONTROLPARENT) setup_info->styleEx = styleEx;
+	if (!setup_info->hMenu) setup_info->hMenu = hMenu;
+	return this->create();
+}
+
+bool Window::created() {
+    return _created;
+}
+
 bool Window::force_focus(DWORD timeout) {
-	const auto focus = [this]() {this->focus(); return false; };
 	HWND fg = GetForegroundWindow();
 	if (!fg) return focus(); // fallback to normal focus
 	DWORD pid = 0;
@@ -170,8 +201,8 @@ bool Window::force_focus(DWORD timeout) {
 	// 通过线程注入，强行获取焦点
 	HMODULE user32 = GetModuleHandleW(L"user32.dll");
 	if (!user32) return focus();
-	LPTHREAD_START_ROUTINE SetForegroundWindow = (LPTHREAD_START_ROUTINE)GetProcAddress(user32, "SetForegroundWindow");
-	if (!SetForegroundWindow) return focus();
+	LPTHREAD_START_ROUTINE AllowSetForegroundWindow = (LPTHREAD_START_ROUTINE)GetProcAddress(user32, "AllowSetForegroundWindow");
+	if (!AllowSetForegroundWindow) return focus();
 	HANDLE hProcess = OpenProcess(
 		// https://learn.microsoft.com/zh-cn/windows/win32/api/processthreadsapi/nf-processthreadsapi-createremotethread
 		PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
@@ -179,7 +210,7 @@ bool Window::force_focus(DWORD timeout) {
 		FALSE, pid
 	);
     if (!hProcess) return focus();
-	HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, SetForegroundWindow, (LPVOID)hwnd, CREATE_SUSPENDED, NULL);
+	HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, AllowSetForegroundWindow, (LPVOID)(size_t)GetCurrentProcessId(), CREATE_SUSPENDED, NULL);
 	CloseHandle(hProcess);
     if (!hThread) return focus();
 	ResumeThread(hThread);
@@ -188,11 +219,12 @@ bool Window::force_focus(DWORD timeout) {
 		DWORD exitCode = 0;
         GetExitCodeThread(hThread, &exitCode);
 		CloseHandle(hThread);
-		if (exitCode == STILL_ACTIVE) return focus();
-		return (exitCode != 0);
+		return focus();
+	} else {
+		Sleep(10);
 	}
     CloseHandle(hThread);
-	return true; // 如果不等待结果，直接视为成功
+	return focus();
 }
 
 void Window::center() {
@@ -714,7 +746,7 @@ HWND BaseSystemWindow::new_window() {
 		setup_info->x, setup_info->y,
 		setup_info->width, setup_info->height,
 		parent, // 必须提供，否则会失败（逆天Windows控件库。。。）并且不可以变化，否则丢消息。。。
-		(HMENU)(LONG_PTR)(ctlid), nullptr, nullptr
+		(HMENU)(LONG_PTR)(ctlid), GetModuleHandle(NULL), nullptr
 	);
 }
 

@@ -43,10 +43,10 @@ namespace MyDemo {
 
     class SimpleNotePadApplication : public Window {
     private:
-        Button *btnOpen;
-        Button *btnSave, *btnSaveAs;
-        Edit *lblFilePath;
-        Edit *txtEditor;
+        Button btnOpen;
+        Button btnSave, btnSaveAs;
+        Edit lblFilePath;
+        Edit txtEditor;
         std::wstring currentFilePath; // 当前文件路径
         HFONT editorFont = NULL;
 
@@ -56,36 +56,30 @@ namespace MyDemo {
         SimpleNotePadApplication(const wstring &title, int width, int height)
             : Window(title, width, height, 0, 0, WS_OVERLAPPEDWINDOW) {}
 
-        ~SimpleNotePadApplication() {
-            if (btnOpen) delete btnOpen;
-            if (btnSave) delete btnSave;
-            if (btnSaveAs) delete btnSaveAs;
-            if (lblFilePath) delete lblFilePath;
-            if (txtEditor) delete txtEditor;
-            if (editorFont) DeleteFont(editorFont);
-        }
-
     protected:
         void onCreated() override {
             // 创建 [打开文件] 按钮
-            btnOpen = new Button(*this, L"打开文件", 80, 30, 10, 10);
-            btnOpen->create();
-            btnOpen->onClick([this](EventData &) { openFile(); });
+            btnOpen.set_parent(*this);
+            btnOpen.create(L"打开文件", 80, 30, 10, 10);
+            btnOpen.create();
+            btnOpen.onClick([this](EventData &) { openFile(); });
 
             // 创建 [保存文件] 按钮
-            btnSave = new Button(*this, L"保存文件", 80, 30, 100, 10);
-            btnSave->create();
-            btnSave->onClick([this](EventData &) { saveFile(); });
+            btnSave.set_parent(*this);
+            btnSave.create(L"保存文件", 80, 30, 100, 10);
+            btnSave.create();
+            btnSave.onClick([this](EventData &) { saveFile(); });
 
             // 创建 [另存为] 按钮
-            btnSaveAs = new Button(*this, L"另存为", 80, 30, 100, 10);
-            btnSaveAs->create();
-            btnSaveAs->onClick([this](EventData &) { saveFile(true); });
+            btnSaveAs.set_parent(*this);
+            btnSaveAs.create(L"另存为", 80, 30, 100, 10);
+            btnSaveAs.create();
+            btnSaveAs.onClick([this](EventData &) { saveFile(true); });
 
             // 创建文件路径显示框（只读）
-            lblFilePath = new Edit(*this, L"当前文件：无", 300, 30, 200, 10);
-            lblFilePath->create();
-            lblFilePath->readonly(true);
+            lblFilePath.set_parent(*this);
+            lblFilePath.create(L"当前文件：无", 300, 30, 200, 10);
+            lblFilePath.readonly(true);
 
             // 创建字体
             editorFont = CreateFontW(-18, -9, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
@@ -93,16 +87,17 @@ namespace MyDemo {
                 L"NSimsun");
 
             // 创建多行编辑框
-            txtEditor = new Edit(*this, L"", 620, 400, 10, 50, 
+            txtEditor.set_parent(*this);
+            txtEditor.create(L"", 620, 400, 10, 50, 
                 WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL | ES_AUTOVSCROLL | ES_MULTILINE | ES_WANTRETURN | WS_HSCROLL | WS_VSCROLL);
-            txtEditor->create();
-            txtEditor->onChange([&](EventData &) { 
+            txtEditor.create();
+            txtEditor.onChange([&](EventData &) { 
                 if (!unsaved) {
-                    btnSave->text(L"请保存!");
+                    btnSave.text(L"请保存!");
                 }
                 unsaved = true; 
             });
-            txtEditor->font(editorFont);
+            txtEditor.font(editorFont);
 
             register_hot_key(true, false, false, 'O', [this](HotKeyProcData& event){
                 event.preventDefault();
@@ -139,7 +134,7 @@ namespace MyDemo {
     public:
         void loadFile(wstring filePath) {
             currentFilePath = filePath;
-            lblFilePath->text(filePath);
+            lblFilePath.text(filePath);
             HANDLE hFile = CreateFileW(currentFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hFile == INVALID_HANDLE_VALUE) {
                 MessageBoxW(hwnd, (L"对不起！我打不开这个文件！原因是：" + to_wstring(GetLastError())).c_str(), L"Sorry!", MB_ICONERROR);
@@ -149,7 +144,7 @@ namespace MyDemo {
             DWORD bytesRead = 0;
             if (ReadFile(hFile, buffer, 1024 * 1024 * 32, &bytesRead, nullptr)) {
                 wstring u16 = ConvertUTF8ToUTF16(buffer);
-                txtEditor->text(u16);
+                txtEditor.text(u16);
             } else {
                 MessageBoxW(hwnd, (L"对不起！我读不出来这个文件！原因是：" + to_wstring(GetLastError())).c_str(), L"Sorry!", MB_ICONERROR);
             }
@@ -171,11 +166,11 @@ namespace MyDemo {
                 int result = MessageBoxW(hwnd, L"你有未保存的更改，是否放弃？", L"提示", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2); 
                 if (result == IDNO) return;
                 unsaved = false;
-                btnSave->text(L"保存文件");
+                btnSave.text(L"保存文件");
             }
 
             if (GetOpenFileName(&ofn)) {
-                lblFilePath->text(filePath);
+                lblFilePath.text(filePath);
 
                 if (MyGetFileSizeW(filePath) > 1024 * 1024 * 32) { // 32MB
                     MessageBoxW(hwnd, L"对不起！文件太大了，我打不开它！", L"Sorry!", MB_ICONERROR);
@@ -202,7 +197,7 @@ namespace MyDemo {
                 if (!GetSaveFileName(&ofn))
                     return;
                 currentFilePath = filePath;
-                lblFilePath->text(currentFilePath);
+                lblFilePath.text(currentFilePath);
             }
 
             // 写入文件
@@ -211,40 +206,41 @@ namespace MyDemo {
                 MessageBoxW(hwnd, (L"对不起！我不能保存这个文件！原因是：" + to_wstring(GetLastError())).c_str(), L"Sorry!", MB_ICONERROR); 
                 return;
             }
-            string u8 = ConvertUTF16ToUTF8(txtEditor->text());
+            string u8 = ConvertUTF16ToUTF8(txtEditor.text());
             DWORD bytesWritten = 0;
             if (!WriteFile(hFile, u8.c_str(), u8.length(), &bytesWritten, nullptr)) {
                 MessageBoxW(hwnd, (L"对不起！我写不了这个文件！原因是：" + to_wstring(GetLastError())).c_str(), L"Sorry!", MB_ICONERROR);
             } else {
                 unsaved = false;
-                btnSave->text(L"保存文件");
+                btnSave.text(L"保存文件");
             }
             CloseHandle(hFile);
         }
 
     private:
         void onSizeChange(EventData &e) {
+            if (!created()) return;
             RECT rc{}; GetClientRect(hwnd, &rc);
             int btnHeight = 30, btnWidth = 80, btnMargin = 10;
             int lblHeight = 30, lblWidth = 300;
             int editorMarginTop = 50;
             int editorMarginSide = 10;
             // 按钮
-            btnOpen->resize(btnWidth, btnHeight);
-            btnOpen->move(btnMargin, btnMargin);
+            btnOpen.resize(btnWidth, btnHeight);
+            btnOpen.move(btnMargin, btnMargin);
 
-            btnSave->resize(btnWidth, btnHeight);
-            btnSave->move(btnMargin + btnWidth + btnMargin, btnMargin);
+            btnSave.resize(btnWidth, btnHeight);
+            btnSave.move(btnMargin + btnWidth + btnMargin, btnMargin);
 
-            btnSaveAs->resize(btnWidth, btnHeight);
-            btnSaveAs->move(btnMargin + 2 * (btnWidth + btnMargin), btnMargin);
+            btnSaveAs.resize(btnWidth, btnHeight);
+            btnSaveAs.move(btnMargin + 2 * (btnWidth + btnMargin), btnMargin);
 
             // 标签
             int lblLeft = btnMargin + 3 * (btnWidth + btnMargin);
             int lblWidthDynamic = rc.right - lblLeft - btnMargin;
             if (lblWidthDynamic < 0) lblWidthDynamic = 0;
-            lblFilePath->resize(lblWidthDynamic, lblHeight);
-            lblFilePath->move(lblLeft, btnMargin);
+            lblFilePath.resize(lblWidthDynamic, lblHeight);
+            lblFilePath.move(lblLeft, btnMargin);
 
             // 编辑框
             int editorTop = editorMarginTop;
@@ -253,8 +249,8 @@ namespace MyDemo {
             int editorHeight = rc.bottom - editorMarginTop - editorMarginSide;
             if (editorWidth < 0) editorWidth = 0;
             if (editorHeight < 0) editorHeight = 0;
-            txtEditor->resize(editorWidth, editorHeight);
-            txtEditor->move(editorLeft, editorTop);
+            txtEditor.resize(editorWidth, editorHeight);
+            txtEditor.move(editorLeft, editorTop);
         }
 
         void onWillClose(EventData &e) {

@@ -17,7 +17,7 @@ namespace MyDemo {
 
     class HotKeyMixedAppDemo : public Window {
     protected:
-        Static *text;
+        Static text;
 
     public:
         HotKeyMixedAppDemo(const wstring& title, int width, int height, int x = 0, int y = 0)
@@ -25,13 +25,10 @@ namespace MyDemo {
         {
             // Do not initialize the button here
         }
-        ~HotKeyMixedAppDemo() override {
-            if (text) delete text;
-        }
     protected:
         void onCreated() override {
-            text = new Static(hwnd, L"Result will show here...", 400, 30);
-            text->create();
+            text.set_parent(*this);
+            text.create(L"Result will show here...", 400, 30);
             register_hot_key(true, false, false, 'A', [&](HotKeyProcData &data) {
                 data.preventDefault();
                 // Be careful! When the Hook is globally hooked
@@ -40,9 +37,9 @@ namespace MyDemo {
                 if (!data.pKbdStruct) return; 
                 // Do not block the hook proc thread
                 std::thread([&] {
-                    text->text(L"Ctrl+A is pressed Windowed");
+                    text.text(L"Ctrl+A is pressed Windowed");
                     Sleep(1000);
-                    text->text(L"Result will show here...");
+                    text.text(L"Result will show here...");
                 }).detach();
             });
             register_hot_key(true, false, false, 'A', [&](HotKeyProcData &data) {
@@ -50,9 +47,9 @@ namespace MyDemo {
                 if (!data.pKbdStruct) return;
                 // Do not block the hook proc thread
                 std::thread([&] {
-                    text->text(L"Ctrl+A is pressed Systemwide");
+                    text.text(L"Ctrl+A is pressed Systemwide");
                     Sleep(1000);
-                    text->text(L"Result will show here...");
+                    text.text(L"Result will show here...");
                 }).detach();
             }, Window::HotKeyOptions::System);
         }

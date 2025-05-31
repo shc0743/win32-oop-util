@@ -21,9 +21,9 @@ namespace MyDemo {
         //	return L"myAppClass";
         //}
     protected:
-        Button* myButton;
-        Edit* myTextBox;
-        Static* myResult;
+        Button myButton;
+        Edit myTextBox;
+        Static myResult;
 
     public:
         SimpleAppDemo(const wstring& title, int width, int height, int x = 0, int y = 0)
@@ -31,38 +31,33 @@ namespace MyDemo {
         {
             // Do not initialize the button here
         }
-        ~SimpleAppDemo() override {
-            if (myButton) delete myButton;
-            if (myTextBox) delete myTextBox;
-            if (myResult) delete myResult;
-        }
     protected:
         void onCreated() override {
             // Instead, create the button here
-            myButton = new Button(*this, L"Click me!", 80, 30, 10, 10);
-            // although looks ugly, we have to call the create
-            myButton->create();
+            myButton.set_parent(*this);
+            myButton.create(L"Click me!", 80, 30, 10, 10);
             // set event handler
-            myButton->onClick([this](EventData& event) {
+            myButton.onClick([this](EventData& event) {
                 MessageBoxW(hwnd, (
-                    L"You typed:" + myTextBox->text()).c_str(), L"Notification", MB_OK);
+                    L"You typed:" + myTextBox.text()).c_str(), L"Notification", MB_OK);
             });
             // create the edit box
-            myTextBox = new Edit(*this, L"Type here", 200, 30, 100, 10);
-            myTextBox->create();
-            myTextBox->onChange([this](EventData& event) {
+            myTextBox.set_parent(*this);
+            myTextBox.create(L"Type here", 200, 30, 100, 10);
+            myTextBox.onChange([this](EventData& event) {
                 // Get the text from the edit box
                 wstring text = dynamic_cast<Edit&>(*event.source()).text();
                 // or directly:
                 // wstring text = event.source()->text(); // using polymorphism
                 // Set the text to the static control
-                myResult->text(text);
+                myResult.text(text);
             });
             // create the static control
-            myResult = new Static(*this, L"Result", 200, 30, 100, 50);
-            myResult->create();
+            myResult.set_parent(*this);
+            myResult.create(L"Result", 200, 30, 100, 50);
         }
         void onClicked(EventData&) {
+            if (!created()) return;
             MessageBoxW(hwnd, L"Window clicked!", L"Notification", MB_OK);
         }
     private:
@@ -89,6 +84,7 @@ namespace MyDemo {
 
 int main() { 
     try {
+        Window::set_global_option(Window::Option_DebugMode, 1);
         int ret = MyDemo::main2();
         return ret;
     }
