@@ -344,7 +344,7 @@ public:
 	}
 	inline void disable() { enable(false); }
 
-	virtual void close();
+	virtual void close(bool async = true);
 
 	// 窗口显示系列函数
 	inline void show(int nCmdShow = SW_SHOW) {

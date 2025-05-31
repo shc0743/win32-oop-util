@@ -253,9 +253,10 @@ void Window::center(HWND hwnd, HWND parent) {
 	SetWindowPos(hwnd, HWND_TOP, rect.left, rect.top, 1, 1, SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER);
 }
 
-void Window::close() {
+void Window::close(bool async) {
 	validate_hwnd();
-	send(WM_CLOSE);
+	if (async) post(WM_CLOSE);
+	else send(WM_CLOSE);
 }
 
 void Window::set_main_window(bool isMainWindow) {
