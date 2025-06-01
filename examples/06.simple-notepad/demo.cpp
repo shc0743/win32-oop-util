@@ -61,19 +61,16 @@ namespace MyDemo {
             // 创建 [打开文件] 按钮
             btnOpen.set_parent(*this);
             btnOpen.create(L"打开文件", 80, 30, 10, 10);
-            btnOpen.create();
             btnOpen.onClick([this](EventData &) { openFile(); });
 
             // 创建 [保存文件] 按钮
             btnSave.set_parent(*this);
             btnSave.create(L"保存文件", 80, 30, 100, 10);
-            btnSave.create();
             btnSave.onClick([this](EventData &) { saveFile(); });
 
             // 创建 [另存为] 按钮
             btnSaveAs.set_parent(*this);
             btnSaveAs.create(L"另存为", 80, 30, 100, 10);
-            btnSaveAs.create();
             btnSaveAs.onClick([this](EventData &) { saveFile(true); });
 
             // 创建文件路径显示框（只读）
@@ -90,7 +87,6 @@ namespace MyDemo {
             txtEditor.set_parent(*this);
             txtEditor.create(L"", 620, 400, 10, 50, 
                 WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL | ES_AUTOVSCROLL | ES_MULTILINE | ES_WANTRETURN | WS_HSCROLL | WS_VSCROLL);
-            txtEditor.create();
             txtEditor.onChange([&](EventData &) { 
                 if (!unsaved) {
                     btnSave.text(L"请保存!");
@@ -99,6 +95,16 @@ namespace MyDemo {
             });
             txtEditor.font(editorFont);
 
+            register_hot_key(true, false, false, 'W', [this](HotKeyProcData& event){
+                event.preventDefault();
+                // 线程模式钩子需要一些额外处理
+                int repeat_count = event.lParam & 0x0000FFFF;
+                if (repeat_count > 1) return;
+                int released_key = (event.lParam >> 31) & 1;
+                if (released_key) return;
+
+                close();
+            }, HotKeyOptions::Windowed);
             register_hot_key(true, false, false, 'O', [this](HotKeyProcData& event){
                 event.preventDefault();
                 // 线程模式钩子需要一些额外处理
@@ -108,7 +114,7 @@ namespace MyDemo {
                 if (released_key) return;
 
                 thread([this](){ openFile(); }).detach();
-            });
+            }, HotKeyOptions::Windowed);
             register_hot_key(true, false, false, 'S', [this](HotKeyProcData& event){
                 event.preventDefault();
                 // 线程模式钩子需要一些额外处理
@@ -117,7 +123,7 @@ namespace MyDemo {
                 int released_key = (event.lParam >> 31) & 1;
                 if (released_key) return;
                 thread([this](){ saveFile(); }).detach();
-            });
+            }, HotKeyOptions::Windowed);
             register_hot_key(true, false, true, 'S', [this](HotKeyProcData& event){
                 event.preventDefault();
                 // 线程模式钩子需要一些额外处理
@@ -126,7 +132,7 @@ namespace MyDemo {
                 int released_key = (event.lParam >> 31) & 1;
                 if (released_key) return;
                 thread([this](){ saveFile(true); }).detach();
-            }); // Ctrl+Shift+S
+            }, HotKeyOptions::Windowed); // Ctrl+Shift+S
 
             add_style_ex(WS_EX_ACCEPTFILES); // 允许接受文件
         }
@@ -219,7 +225,6 @@ namespace MyDemo {
 
     private:
         void onSizeChange(EventData &e) {
-            if (!created()) return;
             RECT rc{}; GetClientRect(hwnd, &rc);
             int btnHeight = 30, btnWidth = 80, btnMargin = 10;
             int lblHeight = 30, lblWidth = 300;

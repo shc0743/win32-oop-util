@@ -37,6 +37,18 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 
 
 namespace w32oop::util { std::wstring s2ws(const std::string str); }
+namespace w32oop::util {
+	class WindowRAIIHelper {
+	private:
+		std::function<void()> fp;
+	public:
+		WindowRAIIHelper(std::function<void()>f) : fp(f) {}
+		~WindowRAIIHelper() { fp(); }
+	};
+}
+namespace w32oop::util {
+	std::vector<HWND> GetAllChildWindows(HWND hParent);
+}
 
 package w32oop declare;
 
@@ -47,6 +59,7 @@ const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
 declare_exception(window_already_initialized);
+declare_exception(window_illegal_state);
 declare_exception(window_class_registration_failure);
 declare_exception(window_creation_failure);
 declare_exception(window_has_no_parent);
@@ -120,11 +133,13 @@ protected:
 	class HotKeyOptions {
 	public:
 		bool ctrl = false;
-        bool shift = false;
-        bool alt = false;
+		bool shift = false;
+		bool alt = false;
 		int vk = 0;
 		enum Scope {
+			Windowed,
 			Thread,
+			Process,
 			System
 		};
 		Scope scope = Thread;
@@ -303,7 +318,7 @@ public:
 	inline bool focus() {
 		validate_hwnd();
 		bool success = SetForegroundWindow(hwnd);
-        SetFocus(hwnd);
+		SetFocus(hwnd);
 		return success;
 	}
 
@@ -405,6 +420,7 @@ protected:
 	virtual void onDestroy();
 
 private:
+	virtual void m_onCreated() final;
 	// 静态消息处理函数
 	static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	// 消息处理函数
@@ -423,61 +439,20 @@ private:
 
 protected:
 	// 注册事件处理器
-	virtual void addEventListener(UINT msg, const function<void(EventData&)>& handler) final {
-		if (GetCurrentThreadId() != _owner) {
-			throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
-		}
-		lock_guard gg(router_lock);
-
-		try {
-			if (!router.contains(msg)) {
-				// 如果消息不存在，创建一个新的消息处理函数列表
-				UINT msg2  = msg;
-				router.insert(std::make_pair<UINT, vector<function<void(EventData&)>>>(std::move(msg2), std::vector<function<void(EventData&)>>()));
-			}
-			router.at(msg).push_back((handler));
-		}
-		catch (...) {
-			throw;
-		}
-	}
-	virtual void removeEventListener(UINT msg) final {
-		if (GetCurrentThreadId() != _owner) {
-			throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
-		}
-		lock_guard gg(router_lock);
-		if (!router.contains(msg)) return;
-		// 清除指定的消息处理函数列表
-		router.erase(msg);
-	}
-	virtual void removeEventListener(UINT msg, const function<void(EventData&)>& handler) final {
-		if (GetCurrentThreadId() != _owner) {
-			throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
-		}
-		lock_guard gg(router_lock);
-		if (!router.contains(msg)) return;
-		auto& handlers = router.at(msg);
-		// 查找匹配的 handler
-		auto it = std::find_if(handlers.begin(), handlers.end(),
-			[&handler](const auto& func) {
-				// 比较两个 std::function 是否指向相同的可调用对象
-				return func.target_type() == handler.target_type() &&
-					func.target<void(EventData&)>() == handler.target<void(EventData&)>();
-			});
-		if (it == handlers.end()) return; // 没找到
-		if (handlers.size() == 1) {
-			removeEventListener(msg); // 如果只有一个处理器，直接清空消息处理函数列表
-			return;
-		}
-		// 如果有多个处理器，移除指定的处理器
-		handlers.erase(it);
-	}
+	virtual void addEventListener(UINT msg, const function<void(EventData&)>& handler) final;
+	virtual void removeEventListener(UINT msg) final;
+	virtual void removeEventListener(UINT msg, const function<void(EventData&)>& handler) final;
 
 	virtual void setup_event_handlers() = 0;
 
 private:
 	// 快捷键相关功能
 	static bool hotkey_handler_contains(bool ctrl, bool shift, bool alt, int vk_code, HotKeyOptions::Scope scope);
+	static LRESULT __stdcall handlekb(
+		int vk, bool ctrl, bool alt, bool shift,
+		PKBDLLHOOKSTRUCT pkb,
+		int code, WPARAM wParam, LPARAM lParam
+	);
 	static LRESULT CALLBACK keyboard_proc(
 		_In_ int    code,
 		_In_ WPARAM wParam,
@@ -554,6 +529,10 @@ public:
 	virtual void set_parent(HWND parent) {
 		this->parent = parent;
 	}
+	virtual void set_parent(Window* pParent) {
+		if (pParent) this->parent = *pParent;
+		else this->parent = nullptr;
+	}
 protected:
 	static std::atomic<unsigned long long> ctlid_generator;
 	unsigned long long ctlid;
@@ -565,7 +544,9 @@ protected:
 	// 注意，对已经注册的Win32控件类，无法使用RegisterClassExW
 	// 也就是说，我们的WndProc将不会被调用
 	// 因此只能使用WINDOW_add_notification_handler而不是WINDOW_add_handler
-	virtual void setup_event_handlers() override {}
+	virtual void setup_event_handlers() override {
+		// 此为顶层控件类，不需要继续super
+	}
 
 public:
 	using CEventHandler = function<void(EventData&)>;
@@ -586,16 +567,17 @@ package foundation declare;
 
 class Static : public BaseSystemWindow {
 public:
-	Static(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, LONG style = WS_CHILD | WS_VISIBLE)
+	static const LONG STYLE = WS_CHILD | WS_VISIBLE;
+	Static(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, LONG style = STYLE)
 		: BaseSystemWindow(parent, text, width, height, x, y, style) {
 	}
-	Static() : BaseSystemWindow(0, L"", 0, 0, 1, 1, WS_CHILD | WS_VISIBLE) {}
+	Static() : BaseSystemWindow(0, L"", 0, 0, 1, 1, STYLE) {}
 	~Static() override {}
 protected:
 	const wstring get_class_name() const override {
 		return L"Static";
 	}
-private:
+protected:
 	virtual void setup_event_handlers() override {
 		WINDOW_EVENT_HANDLER_SUPER(BaseSystemWindow);
 	}
@@ -603,10 +585,11 @@ private:
 
 class Edit : public BaseSystemWindow {
 public:
-	Edit(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, LONG style = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL)
+	static const LONG STYLE = WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL;
+	Edit(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, LONG style = STYLE)
 		: BaseSystemWindow(parent, text, width, height, x, y, style) {
 	}
-	Edit() : BaseSystemWindow(0, L"", 0, 0, 1, 1, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL) {}
+	Edit() : BaseSystemWindow(0, L"", 0, 0, 1, 1, STYLE) {}
 	~Edit() override {}
 	void onChange(CEventHandler handler) {
 		onChangeHandler = handler;
@@ -666,7 +649,7 @@ private:
 			onChangeHandler(data);
 		}
 	}
-
+protected:
 	virtual void setup_event_handlers() override {
 		WINDOW_EVENT_HANDLER_SUPER(BaseSystemWindow);
 		WINDOW_add_notification_handler(EN_CHANGE, onEditChanged);
@@ -675,10 +658,10 @@ private:
 
 class Button : public BaseSystemWindow {
 public:
-	Button(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, int ctlid = 0, LONG style = WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP)
-		: BaseSystemWindow(parent, text, width, height, x, y, style, ctlid) {
-	}
-	Button() : BaseSystemWindow(0, L"", 0, 0, 1, 1, WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP) {}
+	static const LONG STYLE = WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP;
+	Button(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, int ctlid = 0, LONG style = STYLE)
+		: BaseSystemWindow(parent, text, width, height, x, y, style, ctlid) {}
+	Button() : BaseSystemWindow(0, L"", 0, 0, 1, 1, STYLE) {}
 	~Button() override {}
 	void onClick(CEventHandler handler) {
 		onClickHandler = handler;
@@ -695,11 +678,50 @@ private:
 			onClickHandler(data);
 		}
 	}
-
+protected:
 	// for Win32 controls, we use the notification instead of the event
 	virtual void setup_event_handlers() override {
 		WINDOW_EVENT_HANDLER_SUPER(BaseSystemWindow);
 		WINDOW_add_notification_handler(BN_CLICKED, onBtnClicked);
+	}
+};
+
+class CheckBox : public Button {
+public:
+	static constexpr LONG STYLE = WS_CHILD | BS_AUTOCHECKBOX | WS_VISIBLE | WS_TABSTOP;
+	CheckBox(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, int ctlid = 0, LONG style = STYLE)
+		: Button(parent, text, width, height, x, y, ctlid, style) {
+	}
+	CheckBox() : Button(0, L"", 0, 0, 1, 1, 0, STYLE) {}
+	void onCreated() {
+		Button::onCreated();
+	}
+	inline bool checked() {
+		validate_hwnd();
+		return Button_GetCheck(hwnd) == BST_CHECKED;
+	}
+	inline void check(bool checked = true) {
+		validate_hwnd();
+		Button_SetCheck(hwnd, checked ? BST_CHECKED : BST_UNCHECKED);
+	};
+	inline void uncheck() {
+		check(false);
+	}
+	void onChanged(CEventHandler handler) {
+		onChangeHandler = handler;
+	}
+protected:
+	virtual void setup_event_handlers() override {
+		WINDOW_EVENT_HANDLER_SUPER(Button);
+		WINDOW_add_notification_handler(BN_CLICKED, onBtnChecked);
+	}
+private:
+	CEventHandler onChangeHandler;
+	void onBtnChecked(EventData& data) {
+		if (onChangeHandler) {
+			data.preventDefault();
+			onChangeHandler(data);
+		}
 	}
 };
 

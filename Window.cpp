@@ -1,5 +1,6 @@
 ﻿#include "Window.hpp"
 using namespace w32oop;
+using namespace w32oop::util;
 wstring w32oop::util::s2ws(const string str) {
 	wstring result;
 	size_t len = MultiByteToWideChar(CP_ACP, 0, str.c_str(),
@@ -13,6 +14,16 @@ wstring w32oop::util::s2ws(const string str) {
 	result.append(buffer);
 	delete[] buffer;
 	return result;
+}
+static BOOL CALLBACK GetAllChildWindows__EnumChildProc(HWND hwndChild, LPARAM lParam) {
+	std::vector<HWND>* pChildHandles = reinterpret_cast<std::vector<HWND>*>(lParam);
+	pChildHandles->push_back(hwndChild);
+	return TRUE;
+}
+std::vector<HWND> w32oop::util::GetAllChildWindows(HWND hParent) {
+	std::vector<HWND> childHandles;
+	EnumChildWindows(hParent, GetAllChildWindows__EnumChildProc, reinterpret_cast<LPARAM>(&childHandles));
+	return childHandles;
 }
 
 
@@ -30,7 +41,7 @@ std::atomic<unsigned long long> BaseSystemWindow::ctlid_generator;
 const wstring Window::get_class_name() const
 {
 	auto& type = typeid(*this);
-	return util::s2ws(
+	return s2ws(
 		type.name() + "#(C++ Window):"s +
 #ifdef _MSVC_LANG
 		type.raw_name()
@@ -137,6 +148,7 @@ Window& Window::operator=(Window&& other) noexcept {
 
 void Window::create() {
 	if (_created) throw window_already_initialized_exception();
+	if (!setup_info) throw window_illegal_state_exception();
 	transfer_ownership();
 	try {
 		setup_event_handlers();
@@ -146,6 +158,11 @@ void Window::create() {
 	}
 	class_name = get_class_name();
 	register_class_if_needed();
+	if (get_global_option(Option_DebugMode)) {
+		fwprintf(stdout, L"[w32oop::Window]: Creating window `%s` with style `%d` and title `%s`\n",
+			class_name.c_str(), int(setup_info->style), setup_info->title.c_str());
+		fflush(stdout);
+	}
 	hwnd = new_window();
 	if (!hwnd) {
 		if (get_global_option(Option_DebugMode)) {
@@ -158,7 +175,7 @@ void Window::create() {
 		delete setup_info;
 		setup_info = nullptr;
 		managed[hwnd] = this;
-		SendMessageW(hwnd, WM_SETFONT, (WPARAM)get_font(), 0);
+		m_onCreated();
 		onCreated();
 		_created = true;
 	}
@@ -182,21 +199,21 @@ void Window::create(
 	setup_info->width = width;
 	setup_info->height = height;
 	setup_info->x = x; setup_info->y = y;
-	if (!setup_info->style) setup_info->style = style;
-	if (!setup_info->styleEx || setup_info->styleEx == WS_EX_CONTROLPARENT) setup_info->styleEx = styleEx;
+	if (!setup_info->style || style != 0) setup_info->style = style;
+	if (!setup_info->styleEx || setup_info->styleEx != WS_EX_CONTROLPARENT) setup_info->styleEx = styleEx;
 	if (!setup_info->hMenu) setup_info->hMenu = hMenu;
-	return this->create();
+	return create();
 }
 
 bool Window::created() {
-    return _created;
+	return _created;
 }
 
 bool Window::force_focus(DWORD timeout) {
 	HWND fg = GetForegroundWindow();
 	if (!fg) return focus(); // fallback to normal focus
 	DWORD pid = 0;
-    GetWindowThreadProcessId(fg, &pid);
+	GetWindowThreadProcessId(fg, &pid);
 	if (!pid || pid == GetCurrentProcessId()) return focus();
 	// 通过线程注入，强行获取焦点
 	HMODULE user32 = GetModuleHandleW(L"user32.dll");
@@ -209,21 +226,21 @@ bool Window::force_focus(DWORD timeout) {
 		PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
 		FALSE, pid
 	);
-    if (!hProcess) return focus();
+	if (!hProcess) return focus();
 	HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, AllowSetForegroundWindow, (LPVOID)(size_t)GetCurrentProcessId(), CREATE_SUSPENDED, NULL);
 	CloseHandle(hProcess);
-    if (!hThread) return focus();
+	if (!hThread) return focus();
 	ResumeThread(hThread);
 	if (timeout) {
-        WaitForSingleObject(hThread, timeout);
+		WaitForSingleObject(hThread, timeout);
 		DWORD exitCode = 0;
-        GetExitCodeThread(hThread, &exitCode);
+		GetExitCodeThread(hThread, &exitCode);
 		CloseHandle(hThread);
 		return focus();
 	} else {
 		Sleep(10);
 	}
-    CloseHandle(hThread);
+	CloseHandle(hThread);
 	return focus();
 }
 
@@ -399,24 +416,19 @@ Window::~Window() {
 	destroy();
 }
 
-namespace w32oop {
-	class windowRunHookManager {
-	public:
-		HHOOK hHook;
-        windowRunHookManager() : hHook(nullptr) {}
-		~windowRunHookManager() {
-			if (hHook) UnhookWindowsHookEx(hHook);
-		}
-	};
-}
-
 int Window::run() {
-	MSG* lpMsg = new MSG;
-	windowRunHookManager hookManager;
+	auto lpMsgPtr = std::make_unique<MSG>();
+	auto lpMsg = lpMsgPtr.get();
+	HHOOK hHook = NULL;
+	WindowRAIIHelper _1([&hHook] {
+		if (hHook) {
+			UnhookWindowsHookEx(hHook);
+		}
+	});
 	message_loop_thread_id = GetCurrentThreadId();
 	try {
-		bool dialogHandling = !get_global_option(Option_DisableDialogWindowHandling);
-		bool acceleratorHandling = !get_global_option(Option_DisableAcceleratorHandling);
+		volatile bool dialogHandling = !get_global_option(Option_DisableDialogWindowHandling);
+		volatile bool acceleratorHandling = !get_global_option(Option_DisableAcceleratorHandling);
 		HACCEL acceleratorTable = reinterpret_cast<HACCEL>(get_global_option(Option_HACCEL));
 		if (!acceleratorTable) acceleratorHandling = false;
 
@@ -425,21 +437,21 @@ int Window::run() {
 			DWORD dwThreadId = (get_global_option(Option_EnableGlobalHotkey) ? 0 : GetCurrentThreadId());
 			int idHook = (get_global_option(Option_EnableGlobalHotkey) ? WH_KEYBOARD_LL : WH_KEYBOARD);
 			HOOKPROC proc = (get_global_option(Option_EnableGlobalHotkey) ? keyboard_proc_LL : keyboard_proc);
-			hookManager.hHook = SetWindowsHookExW(
+			hHook = SetWindowsHookExW(
 				idHook, proc, GetModuleHandleW(NULL), dwThreadId
 			);
-			if (!hookManager.hHook) {
+			if (!hHook) {
 				if (get_global_option(Option_DebugMode)) {
 					fprintf(stderr, "[Window] SetWindowsHookExW failed: %d\n", GetLastError());
 					DebugBreak();
 				}
 			}
-			_hHook = hookManager.hHook;
+			_hHook = hHook;
 		}
 
 		HWND hRootWnd = NULL;
 		while (GetMessageW(lpMsg, nullptr, 0, 0)) {
-			if (dialogHandling || acceleratorHandling) hRootWnd = GetAncestor(lpMsg->hwnd, GA_ROOT);
+			if (dialogHandling || acceleratorHandling) hRootWnd = GetAncestor(lpMsg->hwnd, GA_ROOTOWNER);
 			if (dialogHandling) {
 				if (IsDialogMessageW(hRootWnd, lpMsg)) continue;
 			}
@@ -451,13 +463,50 @@ int Window::run() {
 			DispatchMessageW(lpMsg);
 		}
 		int returnValue = static_cast<int>(lpMsg->wParam);
-		delete lpMsg;
 		return returnValue;
 	}
 	catch (const std::exception&) {
-		delete lpMsg;
 		throw;
 	}
+}
+
+LRESULT __stdcall Window::handlekb(
+	int vk, bool ctrl, bool alt, bool shift,
+	PKBDLLHOOKSTRUCT pkb,
+	int code, WPARAM wParam, LPARAM lParam
+) {
+	for (auto& pair : hotkey_handlers) {
+		if (pair.first.ctrl == ctrl && pair.first.shift == shift && pair.first.alt == alt && pair.first.vk == vk) {
+			if (pair.first.scope == HotKeyOptions::Windowed) {
+				HWND currentWindow = GetForegroundWindow();
+				if (currentWindow != pair.first.source->hwnd) continue;
+			}
+			if (pair.first.scope == HotKeyOptions::Thread) {
+				HWND currentWindow = GetForegroundWindow();
+				if (!currentWindow) continue;
+				DWORD tid = GetWindowThreadProcessId(currentWindow, NULL);
+				if (tid != message_loop_thread_id) continue;
+			}
+			if (pair.first.scope == HotKeyOptions::Process) {
+				HWND currentWindow = GetForegroundWindow();
+				if (!currentWindow) continue;
+				DWORD pid = 0;
+				GetWindowThreadProcessId(currentWindow, &pid);
+				if (pid != GetCurrentProcessId()) continue;
+			}
+			HotKeyProcData data;
+			bool prevented = false;
+			data.preventDefault = [&prevented]() { prevented = true; };
+			data.wParam = wParam;
+			data.lParam = lParam;
+			data.pKbdStruct = pkb;
+			data.source = pair.first.source;
+			pair.second(data);
+			if (prevented) return 1;
+			return CallNextHookEx(_hHook, code, wParam, lParam);
+		}
+	}
+	return CallNextHookEx(_hHook, code, wParam, lParam);
 }
 
 LRESULT Window::keyboard_proc(
@@ -476,23 +525,7 @@ LRESULT Window::keyboard_proc(
 		ctrl = GetAsyncKeyState(VK_CONTROL) & 0x8000,
 		shift = GetAsyncKeyState(VK_SHIFT) & 0x8000,
 		alt = ((lParam & (static_cast<long long>(1) << 29)) != 0);
-	for (auto& pair : hotkey_handlers) {
-		if (pair.first.ctrl == ctrl && pair.first.shift == shift && pair.first.alt == alt && pair.first.vk == key) {
-			HotKeyProcData data;
-			bool prevented = false;
-			data.preventDefault = [&prevented]() {
-				prevented = true;
-			};
-			data.wParam = wParam;
-			data.lParam = lParam;
-			data.pKbdStruct = nullptr;
-			data.source = pair.first.source;
-			pair.second(data);
-			if (prevented) return 1;
-			return CallNextHookEx(_hHook, code, wParam, lParam);
-		}
-	}
-	return CallNextHookEx(_hHook, code, wParam, lParam);
+	return handlekb(key, ctrl, alt, shift, 0, code, wParam, lParam);
 }
 
 LRESULT Window::keyboard_proc_LL(
@@ -510,35 +543,25 @@ LRESULT Window::keyboard_proc_LL(
 	int vk = p->vkCode;
 	bool 
 		ctrl = GetAsyncKeyState(VK_CONTROL) & 0x8000,
-        shift = GetAsyncKeyState(VK_SHIFT) & 0x8000,
-        alt = GetAsyncKeyState(VK_MENU) & 0x8000;
-	for (auto& pair : hotkey_handlers) {
-		if (pair.first.ctrl == ctrl && pair.first.shift == shift && pair.first.alt == alt && pair.first.vk == vk) {
-			if (pair.first.scope == HotKeyOptions::Thread) {
-				HWND currentWindow = GetForegroundWindow();
-				if (!currentWindow) continue;
-				DWORD tid = GetWindowThreadProcessId(currentWindow, NULL);
-				if (tid != message_loop_thread_id) continue;
-			}
-			HotKeyProcData data;
-			bool prevented = false;
-			data.preventDefault = [&prevented]() {
-				prevented = true;
-			};
-			data.wParam = wParam;
-			data.lParam = lParam;
-			data.pKbdStruct = p;
-			data.source = pair.first.source;
-			pair.second(data);
-			if (prevented) return 1;
-			return CallNextHookEx(_hHook, code, wParam, lParam);
-		}
-	}
-	return CallNextHookEx(_hHook, code, wParam, lParam);
+		shift = GetAsyncKeyState(VK_SHIFT) & 0x8000,
+		alt = GetAsyncKeyState(VK_MENU) & 0x8000;
+	return handlekb(vk, ctrl, alt, shift, p, code, wParam, lParam);
 }
 
 void Window::onCreated() {}
 void Window::onDestroy() {}
+
+void Window::m_onCreated() {
+	SendMessageW(hwnd, WM_SETFONT, (WPARAM)get_font(), 0);
+	addEventListener(WM_SYSCOLORCHANGE, [this](const EventData& data) {
+		// 转发到控件。
+		// https://learn.microsoft.com/zh-cn/windows/win32/controls/control-messages
+		auto controls = util::GetAllChildWindows(hwnd);
+		for (auto hwnd : controls) {
+			PostMessage(hwnd, WM_SYSCOLORCHANGE, data.wParam, data.lParam);
+		}
+	});
+}
 
 LRESULT Window::StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	Window* pThis = nullptr;
@@ -582,10 +605,10 @@ LRESULT Window::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
 			// 来自控件的通知代码。
 			// 此时消息实际上并不是我们的窗口，而是控件的窗口。
 			// 我们需要将消息转发给对应的窗口进行处理。
-            targetWindow = (HWND)lParam;
+			targetWindow = (HWND)lParam;
 			notifCode = hi;
 		}
-        if (msg == WM_NOTIFY) {
+		if (msg == WM_NOTIFY) {
 			NMHDR* ptrhdr = (NMHDR*)lParam;
 			// 检查内存地址是否有效（这是为了提升程序的安全性）。
 			NMHDR hdr{};
@@ -602,7 +625,7 @@ LRESULT Window::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
 			targetWindow = hdr.hwndFrom;
 			//notifCode = hdr.idFrom;
 			notifCode = hdr.code;
-        }
+		}
 		try {
 			Window* target = managed.at(targetWindow);
 			return target->dispatchMessageToWindowAndGetResult(UINT(notifCode + WINDOW_NOTIFICATION_CODES), (UINT)msg, lParam, true);
@@ -621,9 +644,9 @@ LRESULT Window::dispatchMessageToWindowAndGetResult(UINT msg, WPARAM wParam, LPA
 	// 构造EventData
 	EventData data;
 	data.hwnd = hwnd;
-    data.message = msg;
-    data.wParam = wParam;
-    data.lParam = lParam;
+	data.message = msg;
+	data.wParam = wParam;
+	data.lParam = lParam;
 	data.isNotification = isNotification;
 	data.bubble = data.isNotification; // 只有通知消息才冒泡，否则会出现问题
 	data._source = this;
@@ -637,7 +660,7 @@ LRESULT Window::dispatchMessageToWindowAndGetResult(UINT msg, WPARAM wParam, LPA
 	data.stopPropagation = [&]() {
 		data.isStoppedPropagation = true;
 	};
-    data.preventDefault = [&]() {
+	data.preventDefault = [&]() {
 		data.isPreventedDefault = true;
 	};
 
@@ -664,15 +687,68 @@ LRESULT Window::destroy_handler_internal(UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 
+void Window::addEventListener(UINT msg, const function<void(EventData&)>& handler) {
+	if (GetCurrentThreadId() != _owner) {
+		throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
+	}
+	lock_guard gg(router_lock);
+
+	try {
+		if (!router.contains(msg)) {
+			// 如果消息不存在，创建一个新的消息处理函数列表
+			UINT msg2 = msg;
+			router.insert(std::make_pair<UINT, vector<function<void(EventData&)>>>(std::move(msg2), std::vector<function<void(EventData&)>>()));
+		}
+		router.at(msg).push_back((handler));
+	}
+	catch (...) {
+		throw;
+	}
+}
+
+void Window::removeEventListener(UINT msg) {
+	if (GetCurrentThreadId() != _owner) {
+		throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
+	}
+	lock_guard gg(router_lock);
+	if (!router.contains(msg)) return;
+	// 清除指定的消息处理函数列表
+	router.erase(msg);
+}
+
+void Window::removeEventListener(UINT msg, const function<void(EventData&)>& handler) {
+	if (GetCurrentThreadId() != _owner) {
+		throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
+	}
+	lock_guard gg(router_lock);
+	if (!router.contains(msg)) return;
+	auto& handlers = router.at(msg);
+	// 查找匹配的 handler
+	auto it = std::find_if(handlers.begin(), handlers.end(),
+		[&handler](const auto& func) {
+			// 比较两个 std::function 是否指向相同的可调用对象
+			return func.target_type() == handler.target_type() &&
+				func.target<void(EventData&)>() == handler.target<void(EventData&)>();
+		});
+	if (it == handlers.end()) return; // 没找到
+	if (handlers.size() == 1) {
+		removeEventListener(msg); // 如果只有一个处理器，直接清空消息处理函数列表
+		return;
+	}
+	// 如果有多个处理器，移除指定的处理器
+	handlers.erase(it);
+}
+
+
 bool Window::hotkey_handler_contains(bool ctrl, bool shift, bool alt, int vk_code, HotKeyOptions::Scope scope) {
 	lock_guard lock(hotkey_handlers_mutex);
 	for (auto& pair : hotkey_handlers) {
 		auto& item = pair.first;
-        if (item.ctrl == ctrl && item.alt == alt && item.shift == shift && item.vk == vk_code && item.scope == scope) {
+		if (item.ctrl == ctrl && item.alt == alt && item.shift == shift && item.vk == vk_code && item.scope == scope) {
 			return true;
 		}
 	}
-    return false;
+	return false;
 }
 
 void Window::register_hot_key(
@@ -681,24 +757,24 @@ void Window::register_hot_key(
 ) {
 	if (!get_global_option(Option_EnableHotkey))
 		set_global_option(Option_EnableHotkey, true);
-	if (scope == HotKeyOptions::Scope::System) {
+	if (scope == HotKeyOptions::Scope::System || scope == HotKeyOptions::Scope::Process) {
 		if (!get_global_option(Option_EnableGlobalHotkey))
-            set_global_option(Option_EnableGlobalHotkey, true);
+			set_global_option(Option_EnableGlobalHotkey, true);
 	}
 
 	HotKeyOptions options;
-    options.ctrl = ctrl;
-    options.alt = alt;
-    options.shift = shift;
-    options.vk = vk_code;
-    options.scope = scope;
+	options.ctrl = ctrl;
+	options.alt = alt;
+	options.shift = shift;
+	options.vk = vk_code;
+	options.scope = scope;
 	options.source = this;
 
 	lock_guard lock(hotkey_handlers_mutex);
 	if (hotkey_handler_contains(ctrl, alt, shift, vk_code, scope)) {
 		throw window_hotkey_duplication_exception();
 	}
-    hotkey_handlers.insert(make_pair(options, callback));
+	hotkey_handlers.insert(make_pair(options, callback));
 }
 
 void Window::remove_hot_key(bool ctrl, bool alt, bool shift, int vk_code, HotKeyOptions::Scope scope) {
@@ -708,7 +784,7 @@ void Window::remove_hot_key(bool ctrl, bool alt, bool shift, int vk_code, HotKey
 	}
 	for (auto& pair : hotkey_handlers) {
 		if (pair.first.ctrl == ctrl && pair.first.alt == alt && pair.first.shift == shift && pair.first.vk == vk_code && pair.first.scope == scope) {
-            hotkey_handlers.erase(pair.first);
+			hotkey_handlers.erase(pair.first);
 			break;
 		}
 	}
@@ -731,7 +807,7 @@ void Window::remove_all_hot_key_on_window() {
 void Window::remove_all_hot_key_global() {
 	lock_guard lock(hotkey_handlers_mutex);
 	// 直接清空
-    hotkey_handlers.clear();
+	hotkey_handlers.clear();
 }
 
 
