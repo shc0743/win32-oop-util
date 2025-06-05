@@ -439,32 +439,41 @@ private:
 
 protected:
 	// 注册事件处理器
-	virtual void addEventListener(UINT msg, const function<void(EventData&)>& handler) final;
+	virtual void addEventListener(UINT msg, function<void(EventData&)> handler) final;
 	virtual void removeEventListener(UINT msg) final;
-	virtual void removeEventListener(UINT msg, const function<void(EventData&)>& handler) final;
+	virtual void removeEventListener(UINT msg, function<void(EventData&)> handler) final;
 
 	virtual void setup_event_handlers() = 0;
 
 private:
 	// 快捷键相关功能
+	class HotKeyProcInternal {
+	public:
+		HHOOK hHook = NULL;
+		DWORD thread_id = 0;
+	};
+	static atomic<size_t> hotkey_global_count;
 	static bool hotkey_handler_contains(bool ctrl, bool shift, bool alt, int vk_code, HotKeyOptions::Scope scope);
 	static LRESULT __stdcall handlekb(
 		int vk, bool ctrl, bool alt, bool shift,
 		PKBDLLHOOKSTRUCT pkb,
-		int code, WPARAM wParam, LPARAM lParam
+		int code, WPARAM wParam, LPARAM lParam,
+		HotKeyProcInternal* data
 	);
 	static LRESULT CALLBACK keyboard_proc(
-		_In_ int    code,
-		_In_ WPARAM wParam,
-		_In_ LPARAM lParam
+		int    code,
+		WPARAM wParam,
+		LPARAM lParam,
+		long long userdata
 	);
 	static LRESULT CALLBACK keyboard_proc_LL(
-		_In_ int    code,
-		_In_ WPARAM wParam,
-		_In_ LPARAM lParam
+		int    code,
+		WPARAM wParam,
+		LPARAM lParam,
+		long long userdata
 	);
-	static HHOOK _hHook;
-	static DWORD message_loop_thread_id;
+	using MyHookProc = LRESULT(__stdcall*)(int code, WPARAM wParam, LPARAM lParam, long long userdata);
+	static HOOKPROC make_hHook_proc(MyHookProc pfn, long long userdata);
 protected:
 	// 注意：快捷键支持必须
 	// - 要么在 Window::run() 之前调用register_hot_key
@@ -488,7 +497,9 @@ protected:
 		bool ctrl, bool alt, bool shift,
 		int vk_code
 	) final {
+		remove_hot_key(ctrl, alt, shift, vk_code, HotKeyOptions::Scope::Windowed);
 		remove_hot_key(ctrl, alt, shift, vk_code, HotKeyOptions::Scope::Thread);
+		remove_hot_key(ctrl, alt, shift, vk_code, HotKeyOptions::Scope::Process);
 		remove_hot_key(ctrl, alt, shift, vk_code, HotKeyOptions::Scope::System);
 	}
 	virtual void remove_hot_key(
@@ -552,7 +563,7 @@ public:
 	using CEventHandler = function<void(EventData&)>;
 	virtual BaseSystemWindow& on(UINT event, CEventHandler handler) {
 		addEventListener((::w32oop::WINDOW_NOTIFICATION_CODES)+(event),
-			[&](EventData& data) {
+			[this, handler](EventData& data) {
 				if (data.hwnd != this->hwnd || (!data.is_notification())) return; handler(data);
 			});;
 		return *this;
@@ -658,7 +669,7 @@ protected:
 
 class Button : public BaseSystemWindow {
 public:
-	static const LONG STYLE = WS_CHILD | BS_CENTER | BS_DEFPUSHBUTTON | WS_VISIBLE | WS_TABSTOP;
+	static const LONG STYLE = WS_CHILD | BS_CENTER | BS_PUSHBUTTON | WS_VISIBLE | WS_TABSTOP;
 	Button(HWND parent, const std::wstring& text, int width, int height, int x = 0, int y = 0, int ctlid = 0, LONG style = STYLE)
 		: BaseSystemWindow(parent, text, width, height, x, y, style, ctlid) {}
 	Button() : BaseSystemWindow(0, L"", 0, 0, 1, 1, STYLE) {}

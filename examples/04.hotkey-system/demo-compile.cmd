@@ -10,3 +10,4 @@ if %errorlevel% neq 0 (
 cd /d %~dp0
 for %%I in ("%cd%") do set "p=%%~nxI"
 cl /std:c++20 /EHsc /Zi /Fe:"%p%.exe" /D_UNICODE /DUNICODE  ../../Window.cpp demo.cpp /link /MANIFEST:EMBED
+cl /std:c++20 /EHsc /Zi /Fe:"%p%-better.exe" /D_UNICODE /DUNICODE  ../../Window.cpp better-demo.cpp /link /MANIFEST:EMBED

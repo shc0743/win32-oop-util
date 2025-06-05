@@ -33,8 +33,7 @@ HFONT Window::default_font;
 std::recursive_mutex Window::default_font_mutex;
 map<Window::HotKeyOptions, function<void(Window::HotKeyProcData&)>> Window::hotkey_handlers;
 std::recursive_mutex Window::hotkey_handlers_mutex;
-HHOOK Window::_hHook;
-DWORD Window::message_loop_thread_id;
+std::atomic<size_t> Window::hotkey_global_count;
 std::atomic<unsigned long long> BaseSystemWindow::ctlid_generator;
 
 
@@ -416,16 +415,82 @@ Window::~Window() {
 	destroy();
 }
 
+HOOKPROC Window::make_hHook_proc(MyHookProc pfn, long long userdata) {
+	void* memory = VirtualAlloc(NULL, 4096, MEM_COMMIT, PAGE_READWRITE); // 4096是最小的了
+	if (!memory) throw std::bad_alloc();
+	const auto fail = [&](const char* reason) {
+		VirtualFree(memory, 0, MEM_RELEASE);
+		throw std::runtime_error(reason);
+	};
+
+	// 向 memory 写入我们的x86_64代码
+#ifdef _WIN64
+#if 0
+	; x64机器码 - __stdcall函数转发器
+	; 函数签名: LRESULT __stdcall function_name(int nCode, WPARAM wParam, LPARAM lParam)
+	; 转发到: LRESULT __stdcall procname(int nCode, WPARAM wParam, LPARAM lParam, long long userdata)
+#endif
+	static const unsigned char payload[] = {
+		0x53,                               // push rbx
+		0x56,                               // push rsi
+		0x57,                               // push rdi
+		0x55,                               // push rbp
+		0x48, 0x83, 0xEC, 0x28,             // sub rsp, 28h (对齐栈)
+		// 保存参数（注意：lParam 已经在 R8 中！）
+		0x48, 0x89, 0xCB,                   // mov rbx, rcx   ; 保存 nCode
+		0x48, 0x89, 0xD6,                   // mov rsi, rdx   ; 保存 wParam
+		//; lParam 已在 R8
+		// 加载函数指针和用户数据
+		0x48, 0xB8, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // mov rax, [func_ptr]
+		0x49, 0xB9, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, // mov r9, [userdata]
+		// 设置调用参数
+		0x48, 0x89, 0xD9,                   // mov rcx, rbx   ; 恢复 nCode
+		0x48, 0x89, 0xF2,                   // mov rdx, rsi   ; 恢复 wParam
+		0xFF, 0xD0,                         // call rax
+		// 恢复寄存器
+		0x48, 0x83, 0xC4, 0x28,             // add rsp, 28h
+		0x5D,                               // pop rbp
+		0x5F,                               // pop rdi
+		0x5E,                               // pop rsi
+		0x5B,                               // pop rbx
+		0xC3                                // ret
+	};
+
+	size_t written = 0;
+	if (0 == WriteProcessMemory(GetCurrentProcess(), memory, &payload, sizeof(payload), &written) || written != sizeof(payload))
+		fail("Failed to write memory");
+
+	// 写入placeholder
+	// 函数指针（占位符 8 字节）
+	if (!WriteProcessMemory(GetCurrentProcess(), (char*)memory + 16, &pfn, 8, &written) || written != 8)
+		fail("Failed to write function pointer");
+
+	// userdata（占位符 8 字节）
+	if (!WriteProcessMemory(GetCurrentProcess(), (char*)memory + 26, &userdata, 8, &written) || written != 8)
+		fail("Failed to write userdata");
+#else
+#error "Platform is not supported; the library will not work well!"
+#endif
+
+	DWORD old_page_protection = 0;
+	if (!VirtualProtect(memory, sizeof(payload), PAGE_EXECUTE_READ, &old_page_protection)) // 防止写入
+		fail("Failed to change memory protection");
+
+	return reinterpret_cast<HOOKPROC>(memory);
+}
+
 int Window::run() {
-	auto lpMsgPtr = std::make_unique<MSG>();
-	auto lpMsg = lpMsgPtr.get();
+	MSG msg{}; auto lpMsg = &msg;
 	HHOOK hHook = NULL;
-	WindowRAIIHelper _1([&hHook] {
-		if (hHook) {
-			UnhookWindowsHookEx(hHook);
-		}
+	HOOKPROC myproc = nullptr;
+	HotKeyProcInternal* myproc_data = nullptr;
+	bool useGlobalHook = false;
+	WindowRAIIHelper _1([&] {
+		if (hHook) UnhookWindowsHookEx(hHook);
+		if (myproc) VirtualFree(myproc, 0, MEM_RELEASE);
+		if (myproc_data) delete myproc_data;
+		if (useGlobalHook) --hotkey_global_count;
 	});
-	message_loop_thread_id = GetCurrentThreadId();
 	try {
 		volatile bool dialogHandling = !get_global_option(Option_DisableDialogWindowHandling);
 		volatile bool acceleratorHandling = !get_global_option(Option_DisableAcceleratorHandling);
@@ -433,12 +498,23 @@ int Window::run() {
 		if (!acceleratorTable) acceleratorHandling = false;
 
 		// 设置hook
-		if (get_global_option(Option_EnableHotkey) || get_global_option(Option_EnableGlobalHotkey)) {
+		if (get_global_option(Option_EnableHotkey) || get_global_option(Option_EnableGlobalHotkey)) do {
 			DWORD dwThreadId = (get_global_option(Option_EnableGlobalHotkey) ? 0 : GetCurrentThreadId());
 			int idHook = (get_global_option(Option_EnableGlobalHotkey) ? WH_KEYBOARD_LL : WH_KEYBOARD);
-			HOOKPROC proc = (get_global_option(Option_EnableGlobalHotkey) ? keyboard_proc_LL : keyboard_proc);
+			MyHookProc proc = (get_global_option(Option_EnableGlobalHotkey) ? keyboard_proc_LL : keyboard_proc);
+			if (proc == keyboard_proc_LL && hotkey_global_count > 0) {
+				// skip.
+				// 记住：全局热键最好只在主线程中进行，否则UB
+				break;
+			}
+			if (proc == keyboard_proc_LL) {
+				++hotkey_global_count;
+				useGlobalHook = true;
+			}
+            myproc_data = new HotKeyProcInternal();
+            myproc = make_hHook_proc(proc, (long long)myproc_data);
 			hHook = SetWindowsHookExW(
-				idHook, proc, GetModuleHandleW(NULL), dwThreadId
+				idHook, myproc, GetModuleHandleW(NULL), dwThreadId
 			);
 			if (!hHook) {
 				if (get_global_option(Option_DebugMode)) {
@@ -446,12 +522,13 @@ int Window::run() {
 					DebugBreak();
 				}
 			}
-			_hHook = hHook;
-		}
+			myproc_data->hHook = hHook;
+			myproc_data->thread_id = GetCurrentThreadId();
+		} while (0);
 
 		HWND hRootWnd = NULL;
 		while (GetMessageW(lpMsg, nullptr, 0, 0)) {
-			if (dialogHandling || acceleratorHandling) hRootWnd = GetAncestor(lpMsg->hwnd, GA_ROOTOWNER);
+			if (dialogHandling || acceleratorHandling) hRootWnd = GetAncestor(lpMsg->hwnd, GA_ROOT);
 			if (dialogHandling) {
 				if (IsDialogMessageW(hRootWnd, lpMsg)) continue;
 			}
@@ -473,7 +550,8 @@ int Window::run() {
 LRESULT __stdcall Window::handlekb(
 	int vk, bool ctrl, bool alt, bool shift,
 	PKBDLLHOOKSTRUCT pkb,
-	int code, WPARAM wParam, LPARAM lParam
+	int code, WPARAM wParam, LPARAM lParam,
+	HotKeyProcInternal* user
 ) {
 	for (auto& pair : hotkey_handlers) {
 		if (pair.first.ctrl == ctrl && pair.first.shift == shift && pair.first.alt == alt && pair.first.vk == vk) {
@@ -485,7 +563,7 @@ LRESULT __stdcall Window::handlekb(
 				HWND currentWindow = GetForegroundWindow();
 				if (!currentWindow) continue;
 				DWORD tid = GetWindowThreadProcessId(currentWindow, NULL);
-				if (tid != message_loop_thread_id) continue;
+				if (tid != pair.first.source->owner()) continue;
 			}
 			if (pair.first.scope == HotKeyOptions::Process) {
 				HWND currentWindow = GetForegroundWindow();
@@ -503,41 +581,45 @@ LRESULT __stdcall Window::handlekb(
 			data.source = pair.first.source;
 			pair.second(data);
 			if (prevented) return 1;
-			return CallNextHookEx(_hHook, code, wParam, lParam);
+			return CallNextHookEx(user->hHook, code, wParam, lParam);
 		}
 	}
-	return CallNextHookEx(_hHook, code, wParam, lParam);
+	return CallNextHookEx(user->hHook, code, wParam, lParam);
 }
 
 LRESULT Window::keyboard_proc(
-	_In_ int    code,
-	_In_ WPARAM wParam,
-	_In_ LPARAM lParam
+	int    code,
+	WPARAM wParam,
+	LPARAM lParam,
+	long long userdata
 ) {
+    HotKeyProcInternal* user = reinterpret_cast<HotKeyProcInternal*>(userdata);
 	lock_guard lock(hotkey_handlers_mutex);
 	// 如果 代码 小于零，挂钩过程必须将消息传递给 CallNextHookEx 函数，而无需进一步处理，并且应返回 CallNextHookEx 返回的值。
 	// https://learn.microsoft.com/zh-cn/windows/win32/winmsg/keyboardproc
 	if (code < 0) {
-		return CallNextHookEx(_hHook, code, wParam, lParam);
+		return CallNextHookEx(user->hHook, code, wParam, lParam);
 	}
 	int key = (int)wParam;
 	bool
 		ctrl = GetAsyncKeyState(VK_CONTROL) & 0x8000,
 		shift = GetAsyncKeyState(VK_SHIFT) & 0x8000,
 		alt = ((lParam & (static_cast<long long>(1) << 29)) != 0);
-	return handlekb(key, ctrl, alt, shift, 0, code, wParam, lParam);
+	return handlekb(key, ctrl, alt, shift, 0, code, wParam, lParam, user);
 }
 
 LRESULT Window::keyboard_proc_LL(
-	_In_ int    code,
-	_In_ WPARAM wParam,
-	_In_ LPARAM lParam
+	int    code,
+	WPARAM wParam,
+	LPARAM lParam,
+	long long userdata
 ) {
+	HotKeyProcInternal* user = reinterpret_cast<HotKeyProcInternal*>(userdata);
 	lock_guard lock(hotkey_handlers_mutex);
 	// 如果 代码 小于零，挂钩过程必须将消息传递给 CallNextHookEx 函数，而无需进一步处理，并且应返回 CallNextHookEx 返回的值。
 	// https://learn.microsoft.com/zh-cn/windows/win32/winmsg/keyboardproc
 	if ((code < 0) || (wParam != WM_KEYDOWN && wParam != WM_SYSKEYDOWN)) {
-		return CallNextHookEx(_hHook, code, wParam, lParam);
+		return CallNextHookEx(user->hHook, code, wParam, lParam);
 	}
 	PKBDLLHOOKSTRUCT p = reinterpret_cast<PKBDLLHOOKSTRUCT>(lParam);
 	int vk = p->vkCode;
@@ -545,7 +627,7 @@ LRESULT Window::keyboard_proc_LL(
 		ctrl = GetAsyncKeyState(VK_CONTROL) & 0x8000,
 		shift = GetAsyncKeyState(VK_SHIFT) & 0x8000,
 		alt = GetAsyncKeyState(VK_MENU) & 0x8000;
-	return handlekb(vk, ctrl, alt, shift, p, code, wParam, lParam);
+	return handlekb(vk, ctrl, alt, shift, p, code, wParam, lParam, user);
 }
 
 void Window::onCreated() {}
@@ -687,7 +769,7 @@ LRESULT Window::destroy_handler_internal(UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 
-void Window::addEventListener(UINT msg, const function<void(EventData&)>& handler) {
+void Window::addEventListener(UINT msg, function<void(EventData&)> handler) {
 	if (GetCurrentThreadId() != _owner) {
 		throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
 	}
@@ -716,7 +798,7 @@ void Window::removeEventListener(UINT msg) {
 	router.erase(msg);
 }
 
-void Window::removeEventListener(UINT msg, const function<void(EventData&)>& handler) {
+void Window::removeEventListener(UINT msg, function<void(EventData&)> handler) {
 	if (GetCurrentThreadId() != _owner) {
 		throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
 	}
