@@ -199,7 +199,7 @@ void Window::create(
 	setup_info->height = height;
 	setup_info->x = x; setup_info->y = y;
 	if (!setup_info->style || style != 0) setup_info->style = style;
-	if (!setup_info->styleEx || setup_info->styleEx != WS_EX_CONTROLPARENT) setup_info->styleEx = styleEx;
+	if ((setup_info->styleEx == (LONG)-1) && styleEx) setup_info->styleEx = styleEx;
 	if (!setup_info->hMenu) setup_info->hMenu = hMenu;
 	return create();
 }
@@ -528,7 +528,10 @@ int Window::run() {
 
 		HWND hRootWnd = NULL;
 		while (GetMessageW(lpMsg, nullptr, 0, 0)) {
-			if (dialogHandling || acceleratorHandling) hRootWnd = GetAncestor(lpMsg->hwnd, GA_ROOT);
+			if (dialogHandling || acceleratorHandling) {
+				hRootWnd = GetAncestor(lpMsg->hwnd, GA_ROOT);
+                if (hRootWnd == NULL) hRootWnd = lpMsg->hwnd;
+			}
 			if (dialogHandling) {
 				if (IsDialogMessageW(hRootWnd, lpMsg)) continue;
 			}

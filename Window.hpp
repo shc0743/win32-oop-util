@@ -289,8 +289,8 @@ public:
 		int height,
 		int x = 0,
 		int y = 0,
-		LONG style = WS_OVERLAPPED,
-		LONG styleEx = WS_EX_CONTROLPARENT,
+		LONG style = 0,
+		LONG styleEx = 0,
 		HMENU hMenu = nullptr
 	) final;
 	virtual bool created() final;
