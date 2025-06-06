@@ -54,7 +54,7 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50605000;
+constexpr long version = 50605010;
 const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
@@ -86,7 +86,7 @@ public:
 	~EventData() = default;
 public:
 	HWND hwnd;
-	ULONGLONG message; 
+	ULONGLONG message;
 	WPARAM wParam;
 	LPARAM lParam;
 	bool bubble;

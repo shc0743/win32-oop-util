@@ -26,8 +26,8 @@ public:
 	}
 	static char nextKey;
 protected:
-	char key;
-	wchar_t wk;
+	char key = 0;
+	wchar_t wk = 0;
 	vector<thread> myThreads;
 	void onDestroy() override {
 		for (auto& t : myThreads) t.join();
@@ -132,7 +132,7 @@ private:
 };
 char LibDebug::nextKey;
 
-LONG WINAPI myhandler(
+static LONG WINAPI myhandler(
 	_In_ struct _EXCEPTION_POINTERS* ExceptionInfo
 ) {
 	MessageBoxW(nullptr, (L"Exception! " + to_wstring(ExceptionInfo->ExceptionRecord->ExceptionCode)).c_str(), L"Error", MB_ICONERROR);

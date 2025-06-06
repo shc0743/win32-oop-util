@@ -474,7 +474,8 @@ LRESULT Window::dispatchEvent(EventData& data, bool isTrusted, bool shouldBubble
 		}
 	}
 	if (!data.isPreventedDefault && !data.isNotification) {
-		data.result = DefWindowProcW(data.hwnd, data.message, data.wParam, data.lParam);
+		UINT original = static_cast<UINT>(data.message);
+		data.result = DefWindowProcW(data.hwnd, original, data.wParam, data.lParam);
 	}
 	return data.result;
 }
@@ -497,6 +498,9 @@ void Window::dispatchEventForWindow(EventData& data) {
 				}
 				throw;
 			}
+		}
+		if (data.message > WINDOW_NOTIFICATION_CODES) {
+			data.preventDefault(); // 这不是我们的消息，我们不应该处理
 		}
 	}
 	catch (out_of_range&) {
@@ -920,5 +924,5 @@ HWND BaseSystemWindow::new_window() {
 #pragma endregion
 
 const char* version_string() {
-	return "w32oop::version_string 5.6.5.0 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
+	return "w32oop::version_string 5.6.5.1 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
 }
