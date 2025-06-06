@@ -38,3 +38,5 @@ copilot-chat
 CopilotIndices
 Browse.VC.db
 out
+ipch
+*.ipch

@@ -26,6 +26,8 @@ public:
 	}
 	static char nextKey;
 protected:
+	char key;
+	wchar_t wk;
 	vector<thread> myThreads;
 	void onDestroy() override {
 		for (auto& t : myThreads) t.join();
@@ -33,15 +35,15 @@ protected:
 	void onCreated() override {
 		text.set_parent(*this);
 		text.create(L"Result will show here...", 400, 30);
-		char key = nextKey;
+		key = nextKey; wk = key;
 		++nextKey;
 		register_hot_key(true, false, false, key, [&](HotKeyProcData& data) {
 			data.preventDefault();
 			//if (!data.pKbdStruct) return;
 			// Do not block the hook proc thread
 			myThreads.push_back(std::thread([this] {
-				text.text(L"Ctrl+A is pressed Windowed");
-				printf("Ctrl+A is pressed Windowed\n");
+				text.text(L"Ctrl+"s + wk + L" is pressed Windowed");
+				printf("Ctrl+%c is pressed Windowed\n", key);
 				fflush(stdout);
 				Sleep(1000);
 				// 注意：窗口可能已经销毁！所以我们需要集中管理这些线程。（不能detach）
@@ -49,13 +51,13 @@ protected:
 			}));
 		});
 		register_hot_key(true, false, false, key, [&](HotKeyProcData& data) {
-		    data.preventDefault();
-		    //if (!data.pKbdStruct) return;
-		    // Do not block the hook proc thread
+			data.preventDefault();
+			//if (!data.pKbdStruct) return;
+			// Do not block the hook proc thread
 			myThreads.push_back(std::thread([this] {
-				text.text(L"Ctrl+A is pressed Systemwide");
-				printf("Ctrl+A is pressed Systemwide\n");
-                fflush(stdout);
+				text.text(L"Ctrl+"s + wk + L" is pressed Systemwide");
+				printf("Ctrl+%c is pressed Systemwide\n", key);
+				fflush(stdout);
 				Sleep(1000);
 				// 注意：窗口可能已经销毁！所以我们需要集中管理这些线程。（不能detach）
 				text.text(L"Result will show here...");
@@ -63,24 +65,24 @@ protected:
 		 }, Window::HotKeyOptions::System);
 
 		btn.set_parent(this);
-        btn.create(L"Remove hotkey", 200, 30, 10, 30, Button::STYLE | BS_SPLITBUTTON);
-        btn.onClick([=](EventData& event) {
-            remove_hot_key(true, false, false, key);
-            btn.text(L"Removed");
+		btn.create(L"Remove hotkey", 200, 30, 10, 30, Button::STYLE | BS_SPLITBUTTON);
+		btn.onClick([=](EventData& event) {
+			remove_hot_key(true, false, false, key);
+			btn.text(L"Removed");
 			btn.disable();
-        });
+		});
 		btn.on(BCN_DROPDOWN, [&](EventData& event) {
-            text.text(L"You clicked the dropdown button");
+			text.text(L"You clicked the dropdown button");
 		});
 
-        edit.set_parent(this);
-        edit.create(L"", 200, 30, 10, 60);
-        edit.onChange([&](EventData& event) {
-             text.text(L"You edited!");
-        });
+		edit.set_parent(this);
+		edit.create(L"", 200, 30, 10, 60);
+		edit.onChange([&](EventData& event) {
+			 text.text(L"You edited!");
+		});
 
-        newWindow.set_parent(this);
-        newWindow.create(L"Create New Window", 250, 30, 10, 90);
+		newWindow.set_parent(this);
+		newWindow.create(L"Create New Window", 250, 30, 10, 90);
 		newWindow.onClick([&](EventData& event) {
 			thread([&] {
 				try {
@@ -89,15 +91,15 @@ protected:
 					app.center();
 					app.show();
 					app.set_main_window();
-					app.set_global_option(Window::Option_EnableGlobalHotkey, false);
+					//app.set_global_option(Window::Option_EnableGlobalHotkey, false);
 					return app.run();
 				}
 				catch (exception& exc) {
-                    MessageBoxA(nullptr, exc.what(), "Error", MB_ICONERROR);
-                    return 1;
+					MessageBoxA(nullptr, exc.what(), "Error", MB_ICONERROR);
+					return 1;
 				}
 			}).detach();
-        });
+		});
 	}
 	void onPaint(EventData& event) {
 		event.preventDefault();
@@ -110,7 +112,7 @@ protected:
 		}
 		RECT rect;
 		GetClientRect(hwnd, &rect);
-		DrawTextW(hdc, L"Try to press Ctrl+A in your OS and window", -1, &rect, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
+		DrawTextW(hdc, (L"Try to press Ctrl+"s + wk + L" in your OS and window").c_str(), -1, &rect, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
 		if (hOldFont) {
 			SelectObject(hdc, hOldFont);
 		}
@@ -134,7 +136,7 @@ LONG WINAPI myhandler(
 	_In_ struct _EXCEPTION_POINTERS* ExceptionInfo
 ) {
 	MessageBoxW(nullptr, (L"Exception! " + to_wstring(ExceptionInfo->ExceptionRecord->ExceptionCode)).c_str(), L"Error", MB_ICONERROR);
-    return EXCEPTION_EXECUTE_HANDLER;
+	return EXCEPTION_EXECUTE_HANDLER;
 }
 
 int main() {
@@ -145,7 +147,5 @@ int main() {
 	app.set_main_window();
 	app.center();
 	app.show();
-	// 测试禁用全局快捷键
-	app.set_global_option(Window::Option_EnableGlobalHotkey, false);
 	return Window::run();
 }

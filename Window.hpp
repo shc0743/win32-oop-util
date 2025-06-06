@@ -54,7 +54,7 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50604050;
+constexpr long version = 50605000;
 const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
@@ -86,7 +86,7 @@ public:
 	~EventData() = default;
 public:
 	HWND hwnd;
-	UINT message; 
+	ULONGLONG message; 
 	WPARAM wParam;
 	LPARAM lParam;
 	bool bubble;
@@ -114,8 +114,8 @@ public:
 };
 
 
-constexpr UINT WINDOW_NOTIFICATION_CODES = WM_USER + 0x1011caf;
-constexpr UINT WM_MENU_CHECKED = WM_USER + WM_MENUCOMMAND + 0xFFFFFF;
+constexpr ULONGLONG WINDOW_NOTIFICATION_CODES = WM_USER + 0xFFFFFFFFULL;
+constexpr ULONGLONG WM_MENU_CHECKED = WM_USER + WM_MENUCOMMAND + 0xFFFFFFFFULL;
 
 
 class Window {
@@ -129,6 +129,7 @@ public:
 		Option_EnableHotkey,
 		Option_EnableGlobalHotkey,
 	};
+	using msg_t = ULONGLONG;
 protected:
 	class HotKeyOptions {
 	public:
@@ -301,6 +302,10 @@ public:
 		SetParent(child.hwnd, hwnd);
 	}
 
+	virtual bool has_parent() final {
+		validate_hwnd();
+		return GetParent(hwnd);
+	}
 	virtual Window& parent() final {
 		validate_hwnd();
 		HWND parent = GetParent(hwnd);
@@ -425,11 +430,11 @@ private:
 	static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	// 消息处理函数
 	LRESULT WndProc(UINT msg, WPARAM wParam, LPARAM lParam);
-	LRESULT dispatchMessageToWindowAndGetResult(UINT msg, WPARAM wParam, LPARAM lParam, bool isNotification = false);
+	LRESULT dispatchMessageToWindowAndGetResult(msg_t msg, WPARAM wParam, LPARAM lParam, bool isNotification = false);
 
-	LRESULT destroy_handler_internal(UINT msg, WPARAM wParam, LPARAM lParam);
+	LRESULT destroy_handler_internal(WPARAM wParam, LPARAM lParam);
 
-	using EventRouter = unordered_map<UINT,
+	using EventRouter = unordered_map<msg_t,
 		std::vector<
 			std::function<void(EventData&)>
 		>
@@ -439,9 +444,9 @@ private:
 
 protected:
 	// 注册事件处理器
-	virtual void addEventListener(UINT msg, function<void(EventData&)> handler) final;
-	virtual void removeEventListener(UINT msg) final;
-	virtual void removeEventListener(UINT msg, function<void(EventData&)> handler) final;
+	virtual void addEventListener(msg_t msg, function<void(EventData&)> handler) final;
+	virtual void removeEventListener(msg_t msg) final;
+	virtual void removeEventListener(msg_t msg, function<void(EventData&)> handler) final;
 
 	virtual void setup_event_handlers() = 0;
 
@@ -561,14 +566,14 @@ protected:
 
 public:
 	using CEventHandler = function<void(EventData&)>;
-	virtual BaseSystemWindow& on(UINT event, CEventHandler handler) {
+	virtual BaseSystemWindow& on(msg_t event, CEventHandler handler) {
 		addEventListener((::w32oop::WINDOW_NOTIFICATION_CODES)+(event),
 			[this, handler](EventData& data) {
 				if (data.hwnd != this->hwnd || (!data.is_notification())) return; handler(data);
 			});;
 		return *this;
 	}
-	virtual BaseSystemWindow& un(UINT event) {
+	virtual BaseSystemWindow& un(msg_t event) {
 		removeEventListener((::w32oop::WINDOW_NOTIFICATION_CODES)+(event));
 		return *this;
 	}

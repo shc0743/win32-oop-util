@@ -355,6 +355,111 @@ BOOL Window::post(UINT msg, WPARAM wParam, LPARAM lParam) const {
 	return PostMessage(hwnd, msg, wParam, lParam);
 }
 
+LRESULT Window::StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+	Window* pThis = nullptr;
+
+	if (msg == WM_CREATE) {
+		CREATESTRUCT* pCreate = reinterpret_cast<CREATESTRUCT*>(lParam);
+		pThis = reinterpret_cast<Window*>(pCreate->lpCreateParams);
+		SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pThis));
+		pThis->hwnd = hwnd;
+	}
+	else {
+		pThis = reinterpret_cast<Window*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+	}
+
+	if (pThis) {
+		return pThis->WndProc(msg, wParam, lParam);
+	}
+	else {
+		return DefWindowProc(hwnd, msg, wParam, lParam);
+	}
+}
+
+LRESULT Window::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
+	if (!hwnd) return 0;
+	if (msg == WM_DESTROY) {
+		// 窗口被销毁
+		return destroy_handler_internal(wParam, lParam);
+	}
+	// 处理窗口消息
+	// 首先判断特殊的窗口消息，检查源窗口到底是哪个
+	if (msg == WM_COMMAND || msg == WM_NOTIFY) {
+		HWND targetWindow = NULL;
+		WPARAM notifCode = 0;
+		if (msg == WM_COMMAND) {
+			auto hi = HIWORD(wParam), lo = LOWORD(wParam);
+			if (lParam == 0) {
+				// “菜单”或者“加速器”（也就是快捷键）消息
+				auto id = lo;
+				return dispatchMessageToWindowAndGetResult(WM_MENU_CHECKED, id, 0);
+			}
+			// 来自控件的通知代码。
+			// 此时消息实际上并不是我们的窗口，而是控件的窗口。
+			// 我们需要将消息转发给对应的窗口进行处理。
+			targetWindow = (HWND)lParam;
+			notifCode = hi;
+		}
+		if (msg == WM_NOTIFY) {
+			NMHDR* ptrhdr = (NMHDR*)lParam;
+			// 检查内存地址是否有效（这是为了提升程序的安全性）。
+			NMHDR hdr{};
+			bool success = ReadProcessMemory(GetCurrentProcess(), ptrhdr, &hdr, sizeof(NMHDR), nullptr);
+			if (!success) {
+				// the message is evil!!
+				if (get_global_option(Option_DebugMode)) {
+					string message = "The message is evil!! at " + to_string((ULONGLONG)(void*)hwnd) +
+						", received WM_NOTIFY, lParam = " + to_string(lParam);
+					fwrite(message.c_str(), message.size(), 1, stderr);
+				}
+				return DefWindowProc(hwnd, msg, wParam, lParam);
+			}
+			targetWindow = hdr.hwndFrom;
+			//notifCode = hdr.idFrom;
+			notifCode = hdr.code;
+		}
+		try {
+			Window* target = managed.at(targetWindow);
+			return target->dispatchMessageToWindowAndGetResult(msg_t(notifCode + WINDOW_NOTIFICATION_CODES), (UINT)msg, lParam, true);
+		}
+		catch (std::out_of_range&) {
+			// 找不到对应的窗口
+			return DefWindowProc(hwnd, msg, wParam, lParam);
+		}
+	}
+	// 现在源窗口应该就是我们的窗口了。
+	// 直接处理
+	return dispatchMessageToWindowAndGetResult(msg, wParam, lParam, false);
+}
+
+LRESULT Window::dispatchMessageToWindowAndGetResult(msg_t msg, WPARAM wParam, LPARAM lParam, bool isNotification) {
+	// 构造EventData
+	EventData data;
+	data.hwnd = hwnd;
+	data.message = msg;
+	data.wParam = wParam;
+	data.lParam = lParam;
+	data.isNotification = isNotification;
+	data.bubble = data.isNotification; // 只有通知消息才冒泡，否则会出现问题
+	data._source = this;
+
+	// 设置处理程序
+	data.returnValue = [&](LRESULT value) {
+		data.result = value;
+		// 自动 preventDefault
+		data.preventDefault();
+	};
+	data.stopPropagation = [&]() {
+		data.isStoppedPropagation = true;
+	};
+	data.preventDefault = [&]() {
+		data.isPreventedDefault = true;
+	};
+
+	// 分发消息
+	return dispatchEvent(data, true, data.bubble);
+}
+
 LRESULT Window::dispatchEvent(EventData data) {
 	return dispatchEvent(data, false, true);
 }
@@ -364,10 +469,9 @@ LRESULT Window::dispatchEvent(EventData& data, bool isTrusted, bool shouldBubble
 	shouldBubble = shouldBubble && data.bubble;
 	dispatchEventForWindow(data);
 	if (!data.isStoppedPropagation) {
-		if (shouldBubble) try {
+		if (shouldBubble && has_parent()) {
 			return parent().dispatchEvent(data);
 		}
-		catch (window_has_no_parent_exception&) {}
 	}
 	if (!data.isPreventedDefault && !data.isNotification) {
 		data.result = DefWindowProcW(data.hwnd, data.message, data.wParam, data.lParam);
@@ -505,8 +609,9 @@ int Window::run() {
 			int idHook = (get_global_option(Option_EnableGlobalHotkey) ? WH_KEYBOARD_LL : WH_KEYBOARD);
 			MyHookProc proc = (get_global_option(Option_EnableGlobalHotkey) ? keyboard_proc_LL : keyboard_proc);
 			if (proc == keyboard_proc_LL && hotkey_global_count > 0) {
-				// skip.
-				// 记住：全局热键最好只在主线程中进行，否则UB
+				// 全局热键应该在主线程中进行，否则
+				// 某个线程结束后对应的全局钩子被移除
+				// 那就乱套了
 				break;
 			}
 			if (proc == keyboard_proc_LL) {
@@ -648,122 +753,20 @@ void Window::m_onCreated() {
 			PostMessage(hwnd, WM_SYSCOLORCHANGE, data.wParam, data.lParam);
 		}
 	});
+	addEventListener(WM_MENU_CHECKED, [this](const EventData& data) {
+
+	});
 }
 
-LRESULT Window::StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-	Window* pThis = nullptr;
-
-	if (msg == WM_CREATE) {
-		CREATESTRUCT* pCreate = reinterpret_cast<CREATESTRUCT*>(lParam);
-		pThis = reinterpret_cast<Window*>(pCreate->lpCreateParams);
-		SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pThis));
-		pThis->hwnd = hwnd;
-	}
-	else {
-		pThis = reinterpret_cast<Window*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
-	}
-
-	if (pThis) {
-		return pThis->WndProc(msg, wParam, lParam);
-	}
-	else {
-		return DefWindowProc(hwnd, msg, wParam, lParam);
-	}
-}
-
-LRESULT Window::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
-	if (!hwnd) return 0;
-	if (msg == WM_DESTROY) {
-		// 窗口被销毁
-		return destroy_handler_internal(msg, wParam, lParam);
-	}
-	// 处理窗口消息
-	// 首先判断特殊的窗口消息，检查源窗口到底是哪个
-	if (msg == WM_COMMAND || msg == WM_NOTIFY) {
-		HWND targetWindow = NULL;
-		WPARAM notifCode = 0;
-		if (msg == WM_COMMAND) {
-			auto hi = HIWORD(wParam), lo = LOWORD(wParam);
-			if (lParam == 0) {
-				// “菜单”或者“加速器”（也就是快捷键）消息
-				auto id = lo;
-				return dispatchMessageToWindowAndGetResult(WM_MENU_CHECKED, id, 0);
-			}
-			// 来自控件的通知代码。
-			// 此时消息实际上并不是我们的窗口，而是控件的窗口。
-			// 我们需要将消息转发给对应的窗口进行处理。
-			targetWindow = (HWND)lParam;
-			notifCode = hi;
-		}
-		if (msg == WM_NOTIFY) {
-			NMHDR* ptrhdr = (NMHDR*)lParam;
-			// 检查内存地址是否有效（这是为了提升程序的安全性）。
-			NMHDR hdr{};
-			bool success = ReadProcessMemory(GetCurrentProcess(), ptrhdr, &hdr, sizeof(NMHDR), nullptr);
-			if (!success) {
-				// the message is evil!!
-				if (get_global_option(Option_DebugMode)) {
-					string message = "The message is evil!! at " + to_string((ULONGLONG)(void*)hwnd) +
-						", received WM_NOTIFY, lParam = " + to_string(lParam);
-					fwrite(message.c_str(), message.size(), 1, stderr);
-				}
-				return DefWindowProc(hwnd, msg, wParam, lParam);
-			}
-			targetWindow = hdr.hwndFrom;
-			//notifCode = hdr.idFrom;
-			notifCode = hdr.code;
-		}
-		try {
-			Window* target = managed.at(targetWindow);
-			return target->dispatchMessageToWindowAndGetResult(UINT(notifCode + WINDOW_NOTIFICATION_CODES), (UINT)msg, lParam, true);
-		}
-		catch (std::out_of_range&) {
-			// 找不到对应的窗口
-			return DefWindowProc(hwnd, msg, wParam, lParam);
-		}
-	}
-	// 现在源窗口应该就是我们的窗口了。
-	// 直接处理
-	return dispatchMessageToWindowAndGetResult(msg, wParam, lParam, false);
-}
-
-LRESULT Window::dispatchMessageToWindowAndGetResult(UINT msg, WPARAM wParam, LPARAM lParam, bool isNotification) {
-	// 构造EventData
-	EventData data;
-	data.hwnd = hwnd;
-	data.message = msg;
-	data.wParam = wParam;
-	data.lParam = lParam;
-	data.isNotification = isNotification;
-	data.bubble = data.isNotification; // 只有通知消息才冒泡，否则会出现问题
-	data._source = this;
-	
-	// 设置处理程序
-	data.returnValue = [&](LRESULT value) {
-		data.result = value;
-		// 自动 preventDefault
-		data.preventDefault();
-	};
-	data.stopPropagation = [&]() {
-		data.isStoppedPropagation = true;
-	};
-	data.preventDefault = [&]() {
-		data.isPreventedDefault = true;
-	};
-
-	// 分发消息
-	return dispatchEvent(data, true, data.bubble);
-}
-
-LRESULT Window::destroy_handler_internal(UINT msg, WPARAM wParam, LPARAM lParam) {
+LRESULT Window::destroy_handler_internal(WPARAM wParam, LPARAM lParam) {
 	// cleanups
 	onDestroy();
 	if (is_main_window) {
 		// 确保正确退出
 		PostQuitMessage(0);
 	}
-	auto result = DefWindowProc(hwnd, msg, wParam, lParam);
-	// 必须清理钩子！
+	auto result = DefWindowProc(hwnd, WM_DESTROY, wParam, lParam);
+	// 必须清理钩子
 	remove_all_hot_key_on_window();
 	// 清理 managed
 	if (managed.contains(hwnd)) {
@@ -774,7 +777,7 @@ LRESULT Window::destroy_handler_internal(UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 
-void Window::addEventListener(UINT msg, function<void(EventData&)> handler) {
+void Window::addEventListener(msg_t msg, function<void(EventData&)> handler) {
 	if (GetCurrentThreadId() != _owner) {
 		throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
 	}
@@ -783,8 +786,8 @@ void Window::addEventListener(UINT msg, function<void(EventData&)> handler) {
 	try {
 		if (!router.contains(msg)) {
 			// 如果消息不存在，创建一个新的消息处理函数列表
-			UINT msg2 = msg;
-			router.insert(std::make_pair<UINT, vector<function<void(EventData&)>>>(std::move(msg2), std::vector<function<void(EventData&)>>()));
+			msg_t msg2 = msg;
+			router.insert(std::make_pair<msg_t, vector<function<void(EventData&)>>>(std::move(msg2), std::vector<function<void(EventData&)>>()));
 		}
 		router.at(msg).push_back((handler));
 	}
@@ -793,7 +796,7 @@ void Window::addEventListener(UINT msg, function<void(EventData&)> handler) {
 	}
 }
 
-void Window::removeEventListener(UINT msg) {
+void Window::removeEventListener(msg_t msg) {
 	if (GetCurrentThreadId() != _owner) {
 		throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
 	}
@@ -803,7 +806,7 @@ void Window::removeEventListener(UINT msg) {
 	router.erase(msg);
 }
 
-void Window::removeEventListener(UINT msg, function<void(EventData&)> handler) {
+void Window::removeEventListener(msg_t msg, function<void(EventData&)> handler) {
 	if (GetCurrentThreadId() != _owner) {
 		throw window_dangerous_thread_operation_exception("Not allowed to change event handlers outside the owner thread!");
 	}
@@ -917,5 +920,5 @@ HWND BaseSystemWindow::new_window() {
 #pragma endregion
 
 const char* version_string() {
-	return "w32oop::version_string 5.6.4.5 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
+	return "w32oop::version_string 5.6.5.0 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
 }
