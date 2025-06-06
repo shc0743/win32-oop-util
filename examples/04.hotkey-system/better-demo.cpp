@@ -26,6 +26,14 @@ namespace MyDemo {
             // Do not initialize the button here
         }
     protected:
+        vector<thread> myThreads;
+        void onDestroy() override {
+            for (auto& t : myThreads) {
+                if (t.joinable()) {
+                    t.join();
+                }
+            } 
+        }
         void onCreated() override {
             text.set_parent(*this);
             text.create(L"Result will show here...", 400, 30);
@@ -33,11 +41,11 @@ namespace MyDemo {
                 data.preventDefault();
                 if (!data.pKbdStruct) return;
                 // Do not block the hook proc thread! (Especially when the Hook is globally hooked)
-                std::thread([&] {
+                myThreads.push_back(std::thread([&] {
                     text.text(L"Ctrl+Alt+U is pressed!");
                     Sleep(1000);
                     text.text(L"Result will show here...");
-                }).detach();
+                }));
             }, Window::HotKeyOptions::System);
         }
         void onPaint(EventData& event) {

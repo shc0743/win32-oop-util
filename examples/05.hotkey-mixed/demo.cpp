@@ -26,6 +26,14 @@ namespace MyDemo {
             // Do not initialize the button here
         }
     protected:
+        vector<thread> myThreads;
+        void onDestroy() override {
+            for (auto& t : myThreads) {
+                if (t.joinable()) {
+                    t.join();
+                }
+            } 
+        }
         void onCreated() override {
             text.set_parent(*this);
             text.create(L"Result will show here...", 400, 30);
@@ -36,21 +44,21 @@ namespace MyDemo {
                 // The wParam and lParam's meaning is different.
                 if (!data.pKbdStruct) return; 
                 // Do not block the hook proc thread
-                std::thread([&] {
+                myThreads.push_back(std::thread([&] {
                     text.text(L"Ctrl+A is pressed Windowed");
                     Sleep(1000);
                     text.text(L"Result will show here...");
-                }).detach();
+                }));
             });
             register_hot_key(true, false, false, 'A', [&](HotKeyProcData &data) {
                 data.preventDefault();
                 if (!data.pKbdStruct) return;
                 // Do not block the hook proc thread
-                std::thread([&] {
+                myThreads.push_back(std::thread([&] {
                     text.text(L"Ctrl+A is pressed Systemwide");
                     Sleep(1000);
                     text.text(L"Result will show here...");
-                }).detach();
+                }));
             }, Window::HotKeyOptions::System);
         }
         void onPaint(EventData& event) {

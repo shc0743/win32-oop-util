@@ -26,6 +26,10 @@ public:
 	}
 	static char nextKey;
 protected:
+	vector<thread> myThreads;
+	void onDestroy() override {
+		for (auto& t : myThreads) t.join();
+	}
 	void onCreated() override {
 		text.set_parent(*this);
 		text.create(L"Result will show here...", 400, 30);
@@ -35,22 +39,24 @@ protected:
 			data.preventDefault();
 			if (!data.pKbdStruct) return;
 			// Do not block the hook proc thread
-			std::thread([&] {
+			myThreads.push_back(std::thread([this] {
 				text.text(L"Ctrl+A is pressed Windowed");
 				Sleep(1000);
+				// 注意：窗口可能已经销毁！所以我们需要集中管理这些线程。（不能detach）
 				text.text(L"Result will show here...");
-			}).detach();
+			}));
 		});
 		if (key == 'A')
 		register_hot_key(true, false, false, key, [&](HotKeyProcData& data) {
 		    data.preventDefault();
 		    if (!data.pKbdStruct) return;
 		    // Do not block the hook proc thread
-		    std::thread([&] {
-		        text.text(L"Ctrl+A is pressed Systemwide");
-		        Sleep(1000);
-		        text.text(L"Result will show here...");
-		        }).detach();
+			myThreads.push_back(std::thread([this] {
+				text.text(L"Ctrl+A is pressed Systemwide");
+				Sleep(1000);
+				// 注意：窗口可能已经销毁！所以我们需要集中管理这些线程。（不能detach）
+				text.text(L"Result will show here...");
+			}));
 		 }, Window::HotKeyOptions::System);
 
 		btn.set_parent(this);

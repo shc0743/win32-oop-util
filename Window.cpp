@@ -511,8 +511,8 @@ int Window::run() {
 				++hotkey_global_count;
 				useGlobalHook = true;
 			}
-            myproc_data = new HotKeyProcInternal();
-            myproc = make_hHook_proc(proc, (long long)myproc_data);
+			myproc_data = new HotKeyProcInternal();
+			myproc = make_hHook_proc(proc, (long long)myproc_data);
 			hHook = SetWindowsHookExW(
 				idHook, myproc, GetModuleHandleW(NULL), dwThreadId
 			);
@@ -530,7 +530,7 @@ int Window::run() {
 		while (GetMessageW(lpMsg, nullptr, 0, 0)) {
 			if (dialogHandling || acceleratorHandling) {
 				hRootWnd = GetAncestor(lpMsg->hwnd, GA_ROOT);
-                if (hRootWnd == NULL) hRootWnd = lpMsg->hwnd;
+				if (hRootWnd == NULL) hRootWnd = lpMsg->hwnd;
 			}
 			if (dialogHandling) {
 				if (IsDialogMessageW(hRootWnd, lpMsg)) continue;
@@ -596,7 +596,7 @@ LRESULT Window::keyboard_proc(
 	LPARAM lParam,
 	long long userdata
 ) {
-    HotKeyProcInternal* user = reinterpret_cast<HotKeyProcInternal*>(userdata);
+	HotKeyProcInternal* user = reinterpret_cast<HotKeyProcInternal*>(userdata);
 	lock_guard lock(hotkey_handlers_mutex);
 	// 如果 代码 小于零，挂钩过程必须将消息传递给 CallNextHookEx 函数，而无需进一步处理，并且应返回 CallNextHookEx 返回的值。
 	// https://learn.microsoft.com/zh-cn/windows/win32/winmsg/keyboardproc
