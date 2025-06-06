@@ -297,7 +297,7 @@ wstring Window::text() const {
 
 void Window::text(const std::wstring& text) {
 	validate_hwnd();
-	SendMessageW(hwnd, WM_SETTEXT, 0, (LPARAM)text.c_str());
+	PostMessageW(hwnd, WM_SETTEXT, 0, (LPARAM)text.c_str());
 }
 
 HFONT Window::font() const {
