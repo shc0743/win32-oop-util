@@ -37,22 +37,25 @@ protected:
 		++nextKey;
 		register_hot_key(true, false, false, key, [&](HotKeyProcData& data) {
 			data.preventDefault();
-			if (!data.pKbdStruct) return;
+			//if (!data.pKbdStruct) return;
 			// Do not block the hook proc thread
 			myThreads.push_back(std::thread([this] {
 				text.text(L"Ctrl+A is pressed Windowed");
+				printf("Ctrl+A is pressed Windowed\n");
+				fflush(stdout);
 				Sleep(1000);
 				// 注意：窗口可能已经销毁！所以我们需要集中管理这些线程。（不能detach）
 				text.text(L"Result will show here...");
 			}));
 		});
-		if (key == 'A')
 		register_hot_key(true, false, false, key, [&](HotKeyProcData& data) {
 		    data.preventDefault();
-		    if (!data.pKbdStruct) return;
+		    //if (!data.pKbdStruct) return;
 		    // Do not block the hook proc thread
 			myThreads.push_back(std::thread([this] {
 				text.text(L"Ctrl+A is pressed Systemwide");
+				printf("Ctrl+A is pressed Systemwide\n");
+                fflush(stdout);
 				Sleep(1000);
 				// 注意：窗口可能已经销毁！所以我们需要集中管理这些线程。（不能detach）
 				text.text(L"Result will show here...");
@@ -86,6 +89,7 @@ protected:
 					app.center();
 					app.show();
 					app.set_main_window();
+					app.set_global_option(Window::Option_EnableGlobalHotkey, false);
 					return app.run();
 				}
 				catch (exception& exc) {
@@ -136,10 +140,12 @@ LONG WINAPI myhandler(
 int main() {
 	SetUnhandledExceptionFilter(myhandler);
 	Window::set_global_option(Window::Option_DebugMode, true);
-	LibDebug app(L"Debug Application", 640, 480);
+	LibDebug app(L"Debug Application [Main Thread]", 640, 480);
 	app.create();
 	app.set_main_window();
 	app.center();
 	app.show();
+	// 测试禁用全局快捷键
+	app.set_global_option(Window::Option_EnableGlobalHotkey, false);
 	return Window::run();
 }

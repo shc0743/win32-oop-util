@@ -30,10 +30,6 @@ namespace MyDemo {
         void onCreated() override {
             register_hot_key(true, true, false, 'I', [&](HotKeyProcData &data) {
                 data.preventDefault();
-                int repeat_count = data.lParam & 0x0000FFFF;
-                if (repeat_count > 1) return;
-                int released_key = (data.lParam >> 31) & 1;
-                if (released_key) return;
                 MessageBoxW(hwnd, L"Ctrl+Alt+I is pressed", L"Notification", MB_OK);
             });
         }

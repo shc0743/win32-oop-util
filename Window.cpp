@@ -602,7 +602,7 @@ LRESULT Window::keyboard_proc(
 	lock_guard lock(hotkey_handlers_mutex);
 	// 如果 代码 小于零，挂钩过程必须将消息传递给 CallNextHookEx 函数，而无需进一步处理，并且应返回 CallNextHookEx 返回的值。
 	// https://learn.microsoft.com/zh-cn/windows/win32/winmsg/keyboardproc
-	if (code < 0) {
+	if (code < 0 || ((lParam >> 31) & 1)) {
 		return CallNextHookEx(user->hHook, code, wParam, lParam);
 	}
 	int key = (int)wParam;
@@ -623,10 +623,10 @@ LRESULT Window::keyboard_proc_LL(
 	lock_guard lock(hotkey_handlers_mutex);
 	// 如果 代码 小于零，挂钩过程必须将消息传递给 CallNextHookEx 函数，而无需进一步处理，并且应返回 CallNextHookEx 返回的值。
 	// https://learn.microsoft.com/zh-cn/windows/win32/winmsg/keyboardproc
-	if ((code < 0) || (wParam != WM_KEYDOWN && wParam != WM_SYSKEYDOWN)) {
+	PKBDLLHOOKSTRUCT p = reinterpret_cast<PKBDLLHOOKSTRUCT>(lParam);
+	if ((code < 0) || (wParam != WM_KEYDOWN && wParam != WM_SYSKEYDOWN) || (!p)) {
 		return CallNextHookEx(user->hHook, code, wParam, lParam);
 	}
-	PKBDLLHOOKSTRUCT p = reinterpret_cast<PKBDLLHOOKSTRUCT>(lParam);
 	int vk = p->vkCode;
 	bool 
 		ctrl = GetAsyncKeyState(VK_CONTROL) & 0x8000,
