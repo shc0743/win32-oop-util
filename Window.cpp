@@ -198,8 +198,8 @@ void Window::create(
 	setup_info->width = width;
 	setup_info->height = height;
 	setup_info->x = x; setup_info->y = y;
-	if (!setup_info->style || style != 0) setup_info->style = style;
-	if ((setup_info->styleEx == (LONG)-1) && styleEx) setup_info->styleEx = styleEx;
+	if (style) setup_info->style = style;
+	if (styleEx) setup_info->styleEx = styleEx;
 	if (!setup_info->hMenu) setup_info->hMenu = hMenu;
 	return create();
 }
