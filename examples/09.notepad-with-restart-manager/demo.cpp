@@ -170,18 +170,45 @@ namespace MyDemo {
                     session_file.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
                     nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
                 unsaved = true;
+                btnSave.text(L"请保存!");
             }
             RegisterApplicationRestart((L"--restore-session \"" + session_file + L"\"").c_str(), 0);
+            SetTimer(hwnd, 1, 10000, nullptr);
         }
         void onDestroy() override {
             if (hSessionLock) CloseHandle(hSessionLock);
+            if (editorFont) DeleteObject(editorFont);
+            KillTimer(hwnd, 1);
         }
 
     public:
+        void save_session(EventData& event) {
+            // 保存到session_file
+            string u8 = ConvertUTF16ToUTF8(txtEditor.text());
+            DWORD bytesWritten = 0;
+            // 写入文件路径
+            CloseHandle(hSessionLock);
+            hSessionLock = CreateFileW(
+                session_file.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
+                nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr); // 截断文件
+            if (!hSessionLock || hSessionLock == INVALID_HANDLE_VALUE) {
+                return event.returnValue(0);
+            }
+            const wchar_t* filepath = currentFilePath.c_str();
+            DWORD dwFilePathLen = (DWORD)currentFilePath.length();
+            WriteFile(hSessionLock, &dwFilePathLen, sizeof(DWORD), &bytesWritten, nullptr);
+            if (dwFilePathLen) WriteFile(hSessionLock, filepath, DWORD(dwFilePathLen * sizeof(wchar_t)), &bytesWritten, nullptr);
+            // 写入文件内容
+            if (!WriteFile(hSessionLock, u8.c_str(), u8.length(), &bytesWritten, nullptr)) {
+                return event.returnValue(0);
+            }
+            event.returnValue(1);
+        }
         void loadFile(wstring filePath, bool isRecovery = false) {
             currentFilePath = filePath;
             HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hFile == INVALID_HANDLE_VALUE) {
+                if (isRecovery) ExitProcess(0); // 已经失效
                 MessageBoxW(hwnd, (L"对不起！我打不开这个文件！原因是：" + to_wstring(GetLastError())).c_str(), L"Sorry!", MB_ICONERROR);
                 return;
             }
@@ -341,30 +368,21 @@ namespace MyDemo {
         }
         void onWillShutdown(EventData &e) {
             if (!unsaved) {
+                UnregisterApplicationRestart();
                 CloseHandle(hSessionLock);
                 if (hSessionLock) DeleteFileW(session_file.c_str());
                 hSessionLock = NULL;
+                PostQuitMessage(0);
                 return;
             }
-            e.returnValue(0);
-            thread([this]() {
-                // 保存到session_file
-                string u8 = ConvertUTF16ToUTF8(txtEditor.text());
-                DWORD bytesWritten = 0;
-                // 写入文件路径
-                const wchar_t* filepath = currentFilePath.c_str();
-                DWORD dwFilePathLen = (DWORD)currentFilePath.length();
-                WriteFile(hSessionLock, &dwFilePathLen, sizeof(DWORD), &bytesWritten, nullptr);
-                if (dwFilePathLen) WriteFile(hSessionLock, filepath, DWORD(dwFilePathLen * sizeof(wchar_t)), &bytesWritten, nullptr);
-                // 写入文件内容
-                if (!WriteFile(hSessionLock, u8.c_str(), u8.length(), &bytesWritten, nullptr)) {
-                    return;
-                }
+            if (send(WM_USER + 2)) {
                 CloseHandle(hSessionLock);
                 hSessionLock = NULL;
                 unsaved = false;
                 close(); // 安全地退出
-            }).detach();
+            } else {
+                e.returnValue(0);
+            }
         }
         void onDrop(EventData &e) {
             e.preventDefault();
@@ -381,6 +399,15 @@ namespace MyDemo {
             DragQueryFileW(hDrop, 0, filePath.get(), 32768); // 支持长路径
             loadFile(filePath.get());
         }
+        void onTimer(EventData& event) {
+            switch (event.wParam) {
+                case 1: {
+                    post(WM_USER + 2);
+                    break;
+                }
+                default:;
+            }
+        }
 
         virtual void setup_event_handlers() override {
             WINDOW_add_handler(WM_SIZING, onSizeChange);
@@ -389,6 +416,8 @@ namespace MyDemo {
             WINDOW_add_handler(WM_QUERYENDSESSION, onWillShutdown);
             WINDOW_add_handler(WM_ENDSESSION, onWillShutdown);
             WINDOW_add_handler(WM_DROPFILES, onDrop);
+            WINDOW_add_handler(WM_TIMER, onTimer);
+            WINDOW_add_handler(WM_USER + 2, save_session);
         }
     };
 
