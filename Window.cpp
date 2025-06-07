@@ -924,5 +924,5 @@ HWND BaseSystemWindow::new_window() {
 #pragma endregion
 
 const char* version_string() {
-	return "w32oop::version_string 5.6.5.1 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
+	return "w32oop::version_string 5.6.5.2 (C++ Win32 Object-Oriented Programming Framework) GI/5.6";
 }

@@ -54,7 +54,7 @@ package w32oop declare;
 
 using package std;
 
-constexpr long version = 50605010;
+constexpr long version = 50605020;
 const char* version_string(); // V5.6 Paralogism
 
 declare_exception(window_not_initialized);
@@ -114,8 +114,8 @@ public:
 };
 
 
-constexpr ULONGLONG WINDOW_NOTIFICATION_CODES = WM_USER + 0xFFFFFFFFULL;
-constexpr ULONGLONG WM_MENU_CHECKED = WM_USER + WM_MENUCOMMAND + 0xFFFFFFFFULL;
+constexpr ULONGLONG WINDOW_NOTIFICATION_CODES = WM_USER + 0x1000FFFFFFFFULL;
+constexpr ULONGLONG WM_MENU_CHECKED = WM_USER + WM_MENUCOMMAND + 0x2000FFFFFFFFULL;
 
 
 class Window {

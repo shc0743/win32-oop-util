@@ -14,19 +14,11 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 3,
+          "SelectedChildIndex": 1,
           "Children": [
             {
               "$type": "Bookmark",
-              "Name": "ST:0:0:{d3750d8a-574b-4fb3-b7e2-aa8af40e8231}"
-            },
-            {
-              "$type": "Bookmark",
-              "Name": "ST:128:0:{1fc202d4-d401-403c-9834-5b218574bb67}"
-            },
-            {
-              "$type": "Bookmark",
-              "Name": "ST:128:0:{116d2292-e37d-41cd-a077-ebacac4c8cc4}"
+              "Name": "ST:0:0:{cce594b6-0c39-4442-ba28-10c64ac7e89f}"
             },
             {
               "$type": "Document",
@@ -36,14 +28,10 @@
               "RelativeDocumentMoniker": "w32oop-debug\\w32oop-debug.cpp",
               "ToolTip": "D:\\software\\Program\\source\\git\\github.com\\shc0743\\win32-oop-util\\examples\\00.w32oop-debug\\w32oop-debug\\w32oop-debug.cpp",
               "RelativeToolTip": "w32oop-debug\\w32oop-debug.cpp",
-              "ViewState": "AgIAAHsAAAAAAAAAAADgv48AAAAaAAAAAAAAAA==",
+              "ViewState": "AgIAAHsAAAAAAAAAAADgv4cAAAAvAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
               "WhenOpened": "2025-06-06T17:45:32.786Z",
               "EditorCaption": ""
-            },
-            {
-              "$type": "Bookmark",
-              "Name": "ST:0:0:{cce594b6-0c39-4442-ba28-10c64ac7e89f}"
             }
           ]
         }
