@@ -82,7 +82,7 @@ protected:
 		});
 
 		newWindow.set_parent(this);
-		newWindow.create(L"Create New Window", 250, 30, 10, 90);
+		newWindow.create(L"Create New Window", 250, 30, 10, 90, Button::STYLE | BS_DEFPUSHBUTTON);
 		newWindow.onClick([&](EventData& event) {
 			thread([&] {
 				try {
