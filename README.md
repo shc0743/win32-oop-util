@@ -1,6 +1,6 @@
 # win32-oop-util
 
-Win32 OOP Utility
+**Important**: This project has been moved to [w32oop](https://github.com/shc0743/w32oop]. The `win32-oop-util` has been archived.
 
 ## Usage
 
